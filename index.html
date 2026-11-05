@@ -1,0 +1,151 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Recorrido Canal</title>
+<link rel="stylesheet" href="style.css">
+<link rel="manifest" href="manifest.json">
+<link rel="apple-touch-icon" href="icons/apple-touch-icon.png">
+<meta name="theme-color" content="#0d47a1">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-title" content="Recorrido">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+</head>
+<body>
+
+<header id="top">
+  <button id="btnBack" class="icon" aria-label="Regresar" hidden>&#8249;</button>
+  <div class="ttl">
+    <div id="hTitle">Recorrido de Canal</div>
+    <div id="hSub">Reconocimiento de estructuras</div>
+  </div>
+  <span id="gps" class="chip" hidden>GPS…</span>
+</header>
+
+<main>
+  <!-- INICIO -->
+  <section id="vInicio" class="view">
+    <div class="card">
+      <h2>Nuevo recorrido</h2>
+      <label>Trazo de los canales (KMZ / KML)</label>
+      <button id="btnTrazoNuevo" type="button" class="btn ghost block" style="margin-top:0">Cargar KMZ / KML con los tramos</button>
+      <div id="trazoNuevoInfo" class="hint"></div>
+      <label>Nombre del canal *
+        <input id="inCanal" type="text" placeholder="Se llena solo con el canal más cercano del KMZ" autocomplete="off">
+      </label>
+      <label>Responsable del recorrido
+        <input id="inResp" type="text" placeholder="Nombre de quien levanta" autocomplete="off">
+      </label>
+      <label>Tramo / observaciones
+        <input id="inTramo" type="text" placeholder="Ej. Km 0+000 al Km 12+500" autocomplete="off">
+      </label>
+      <button id="btnIniciar" class="btn primary block">Iniciar recorrido</button>
+    </div>
+    <h3 class="sect">Recorridos guardados</h3>
+    <div id="listaRec"></div>
+  </section>
+
+  <!-- RECORRIDO -->
+  <section id="vRec" class="view" hidden>
+    <div class="exports">
+      <button id="btnWord" class="btn word">Reporte Word</button>
+      <button id="btnKmz" class="btn kmz">Archivo KMZ</button>
+      <button id="btnCsv" class="btn ghost">Tabla CSV</button>
+    </div>
+    <div class="card">
+      <div id="trazoBar"></div>
+      <canvas id="croquis" hidden></canvas>
+    </div>
+    <div id="listaEst"></div>
+    <button id="btnNueva" class="fab">+ Estructura</button>
+  </section>
+
+  <!-- ESTRUCTURA -->
+  <section id="vEst" class="view" hidden>
+    <div class="card">
+      <div class="row2">
+        <label>Clave
+          <input id="fCodigo" type="text" autocomplete="off">
+        </label>
+        <label>Cadenamiento (km)
+          <input id="fKm" type="text" placeholder="0+000" autocomplete="off">
+        </label>
+      </div>
+      <label>Tipo de estructura
+        <select id="fTipo"></select>
+      </label>
+      <div id="fSugerencia" class="sug" hidden></div>
+      <label id="lblOtro" hidden>Especifique el tipo
+        <input id="fTipoOtro" type="text" autocomplete="off">
+      </label>
+      <label>Estado físico</label>
+      <div id="fEstado" class="seg"></div>
+      <div id="fSugEstado" class="sug" hidden></div>
+      <label>Descripción de la estructura (pie de foto)
+        <textarea id="fDesc" rows="6" placeholder="Ej. Toma granja de concreto armado con compuerta deslizante de 0.60 x 0.60 m, mecanismo oxidado, losa con fisuras…"></textarea>
+      </label>
+      <div id="fSugDesc" class="sug" hidden></div>
+    </div>
+
+    <div class="card">
+      <h3>Ubicación</h3>
+      <div id="fUbic" class="ubic">Sin coordenadas. Se tomarán con la primera foto.</div>
+      <button id="btnFijar" class="btn ghost block">Usar ubicación actual</button>
+    </div>
+
+    <div class="card">
+      <h3>Fotografías</h3>
+      <div id="fFotos" class="fotos"></div>
+      <div class="row2">
+        <button id="btnCam" class="btn primary">Tomar foto</button>
+        <button id="btnGal" class="btn ghost">Galería</button>
+      </div>
+      <button id="btnGuardarFotos" type="button" class="btn ghost block" hidden></button>
+      <label class="chk"><input id="fMejorar" type="checkbox" checked> Mejorar imagen automáticamente (contraste, color y nitidez)</label>
+      <label class="chk"><input id="fGaleria" type="checkbox" checked> Guardar las fotos de la cámara en la galería (con ubicación GPS)</label>
+      <p class="hint">La primera foto es la principal del reporte. Toca una foto para hacerla principal.</p>
+    </div>
+
+    <div class="bar">
+      <button id="btnEliminar" class="btn danger">Eliminar</button>
+      <button id="btnGuardar" class="btn primary">Guardar estructura</button>
+    </div>
+  </section>
+</main>
+
+<input id="inCam" type="file" accept="image/*" capture="environment" hidden>
+<input id="inGal" type="file" accept="image/*" multiple hidden>
+<input id="inKmz" type="file" accept=".kmz,.kml,application/vnd.google-earth.kmz,application/vnd.google-earth.kml+xml" hidden>
+
+<div id="overlay" hidden><div class="box"><div class="spin"></div><div id="ovMsg">Procesando…</div></div></div>
+
+<div id="dlg" hidden>
+  <div class="box">
+    <div id="dlgMsg"></div>
+    <div class="row2">
+      <button id="dlgOpen" class="btn primary">Abrir</button>
+      <button id="dlgShare" class="btn ghost">Compartir</button>
+    </div>
+    <button id="dlgClose" class="btn ghost block">Cerrar</button>
+  </div>
+</div>
+
+<div id="dlgSentido" hidden>
+  <div class="box">
+    <h3>Sentido del kilometraje</h3>
+    <div id="sentMsg"></div>
+    <button id="sentA" class="btn primary block sent"></button>
+    <button id="sentB" class="btn primary block sent"></button>
+  </div>
+</div>
+
+<div id="toast" hidden></div>
+
+<script src="lib/jszip.min.js"></script>
+<script src="lib/docx.umd.js"></script>
+<script src="lib/tf.min.js"></script>
+<script src="app.js"></script>
+</body>
+</html>

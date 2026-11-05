@@ -1,0 +1,17 @@
+{
+  "name": "Recorrido Canal",
+  "short_name": "Recorrido",
+  "description": "Reconocimiento de estructuras de canales de riego: fotos georreferenciadas, KMZ y reporte Word.",
+  "lang": "es-MX",
+  "start_url": "./index.html",
+  "scope": "./",
+  "display": "standalone",
+  "orientation": "portrait",
+  "background_color": "#eef2f7",
+  "theme_color": "#0d47a1",
+  "icons": [
+    { "src": "icons/icon-192.png", "sizes": "192x192", "type": "image/png" },
+    { "src": "icons/icon-512.png", "sizes": "512x512", "type": "image/png" },
+    { "src": "icons/icon-maskable-512.png", "sizes": "512x512", "type": "image/png", "purpose": "maskable" }
+  ]
+}
