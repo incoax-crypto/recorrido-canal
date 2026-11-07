@@ -42,6 +42,7 @@
         <input id="inTramo" type="text" placeholder="Ej. Km 0+000 al Km 12+500" autocomplete="off">
       </label>
       <button id="btnIniciar" class="btn primary block">Iniciar recorrido</button>
+      <button id="btnImportar" type="button" class="btn ghost block">Abrir recorrido desde archivo (.rcanal)</button>
     </div>
     <h3 class="sect">Recorridos guardados</h3>
     <div id="listaRec"></div>
@@ -53,6 +54,7 @@
       <button id="btnWord" class="btn word">Reporte Word</button>
       <button id="btnKmz" class="btn kmz">Archivo KMZ</button>
       <button id="btnCsv" class="btn ghost">Tabla CSV</button>
+      <button id="btnExportar" class="btn rec">Guardar / compartir recorrido</button>
     </div>
     <div class="card">
       <div id="trazoBar"></div>
@@ -117,6 +119,7 @@
 
 <input id="inCam" type="file" accept="image/*" capture="environment" hidden>
 <input id="inGal" type="file" accept="image/*" multiple hidden>
+<input id="inRec" type="file" hidden>
 <input id="inKmz" type="file" accept=".kmz,.kml,application/vnd.google-earth.kmz,application/vnd.google-earth.kml+xml" hidden>
 
 <div id="overlay" hidden><div class="box"><div class="spin"></div><div id="ovMsg">Procesando…</div></div></div>

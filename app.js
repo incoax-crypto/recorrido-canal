@@ -1533,6 +1533,98 @@ ${marcas}
     sinCoord ? `<br><br>⚠ ${sinCoord} estructura(s) sin coordenadas no se incluyeron.` : '');
 }
 
+/* ---------- Archivo de recorrido (.rcanal): respaldo y traspaso entre teléfonos ---------- */
+
+/* Formato: ZIP con recorrido.json (recorrido, KMZ del canal, estructuras, huellas para identificar) y fotos/*.jpg */
+const FORMATO_REC = 'recorrido-canal';
+
+function bytesB64(u8) {
+  let s = '';
+  for (let i = 0; i < u8.length; i += 0x8000) s += String.fromCharCode.apply(null, u8.subarray(i, i + 0x8000));
+  return btoa(s);
+}
+const b64Bytes = b => Uint8Array.from(atob(b), c => c.charCodeAt(0));
+
+async function exportarRecorrido() {
+  busy('Preparando archivo del recorrido…');
+  const ests = await estructurasDe(rec.id);
+  const zip = new JSZip();
+  const datos = { formato: FORMATO_REC, version: 1, exportado: Date.now(), recorrido: rec, estructuras: [] };
+  for (const e of ests) {
+    const { fotos, nuevo, tipoManual, estadoManual, descAuto, ...resto } = e;
+    const fotosJson = [];
+    for (const [i, f] of fotos.entries()) {
+      const archivo = `fotos/${slug(e.codigo)}_${i + 1}_${e.id}.jpg`;
+      zip.file(archivo, f.blob);
+      const { blob, emb, ...meta } = f;
+      fotosJson.push({ ...meta, archivo, emb: emb ? bytesB64(new Uint8Array(emb.buffer, emb.byteOffset, emb.byteLength)) : null });
+    }
+    datos.estructuras.push({ ...resto, fotos: fotosJson });
+  }
+  zip.file('recorrido.json', JSON.stringify(datos));
+  const b64 = await zip.generateAsync({ type: 'base64', compression: 'STORE' });
+  await guardarArchivo(`Recorrido_${slug(rec.canal)}_${hoy()}.rcanal`, b64, 'application/octet-stream',
+    `<br><br>${ests.length} estructura(s) con sus fotos. Ábrelo en otro teléfono con la app <b>Recorrido Canal</b> ` +
+    '(tocando el archivo o con "Abrir recorrido desde archivo").');
+}
+
+/* Importa un archivo .rcanal: si el recorrido ya existe, pregunta si reemplazarlo o guardarlo como copia. */
+async function importarRecorrido(bytes) {
+  busy('Abriendo recorrido…');
+  let zip, datos;
+  try {
+    zip = await JSZip.loadAsync(bytes);
+    datos = JSON.parse(await zip.file('recorrido.json').async('string'));
+  } catch (e) {
+    throw new Error('el archivo no es un recorrido de la app (.rcanal) o está dañado');
+  }
+  if (datos.formato !== FORMATO_REC) throw new Error('el archivo no es un recorrido de la app (.rcanal)');
+  let r = datos.recorrido, sufijo = '';
+  const existe = await dbGet('recorridos', r.id);
+  if (existe) {
+    idle();
+    if (confirm(`Ya tienes el recorrido "${existe.canal}" en este teléfono.\n\nAceptar: reemplazarlo con el del archivo.\nCancelar: guardarlo como copia.`)) {
+      for (const e of await estructurasDe(r.id)) await dbDel('estructuras', e.id);
+    } else {
+      sufijo = '_c' + Date.now();
+      r = { ...r, id: r.id + sufijo, canal: r.canal + ' (copia)' };
+    }
+    busy('Abriendo recorrido…');
+  }
+  for (const e of datos.estructuras) {
+    const fotos = [];
+    for (const f of e.fotos) {
+      const arch = zip.file(f.archivo);
+      if (!arch) continue;
+      const blob = new Blob([await arch.async('uint8array')], { type: 'image/jpeg' });
+      const { archivo, emb, ...meta } = f;
+      fotos.push({ ...meta, blob, emb: emb ? new Float32Array(b64Bytes(emb).buffer) : null });
+    }
+    const est = { ...e, id: e.id + sufijo, recId: r.id, fotos };
+    await dbPut('estructuras', est);
+    await aprender(est); // lo aprendido en el otro teléfono también sirve aquí
+  }
+  await dbPut('recorridos', r);
+  rec = r;
+  await renderRec();
+  toast(`Recorrido abierto: ${datos.estructuras.length} estructura(s)`, 4000);
+}
+
+/* Android: archivo .rcanal abierto desde WhatsApp, Archivos, correo… (lo entrega MainActivity en trozos). */
+window.__abrirEntrante = () => ejecutar(async () => {
+  if (!APP || !Android.entranteTrozos) return;
+  const n = Android.entranteTrozos();
+  if (!n) return;
+  busy('Recibiendo archivo…');
+  const partes = [];
+  for (let i = 0; i < n; i++) { partes.push(b64Bytes(Android.entranteTrozo(i))); await tick(); }
+  Android.entranteLiberar();
+  const total = partes.reduce((s, p) => s + p.length, 0), bytes = new Uint8Array(total);
+  let o = 0;
+  for (const p of partes) { bytes.set(p, o); o += p.length; }
+  await importarRecorrido(bytes);
+});
+
 /* ---------- Tabla CSV (Excel) ---------- */
 
 async function generarCSV() {
@@ -1596,6 +1688,12 @@ async function init() {
   $('#btnWord').onclick = () => ejecutar(generarWord);
   $('#btnKmz').onclick = () => ejecutar(generarKMZ);
   $('#btnCsv').onclick = () => ejecutar(generarCSV);
+  $('#btnExportar').onclick = () => ejecutar(exportarRecorrido);
+  $('#btnImportar').onclick = () => { $('#inRec').value = ''; $('#inRec').click(); };
+  $('#inRec').onchange = ev => {
+    const f = ev.target.files[0];
+    if (f) ejecutar(async () => importarRecorrido(new Uint8Array(await f.arrayBuffer())));
+  };
 
   $('#vEst').addEventListener('input', () => { dirty = true; });
   $('#fTipo').onchange = () => {
@@ -1685,6 +1783,7 @@ async function init() {
   trazoNuevo = await cfgGet('trazo') || null;
   if (trazoNuevo) { canalAuto = true; $('#btnTrazoNuevo').textContent = 'Cambiar KMZ / KML'; }
   await renderInicio();
+  window.__abrirEntrante(); // ¿la app se abrió tocando un archivo .rcanal?
 }
 
 init().catch(e => alert('Error al iniciar: ' + e.message));
