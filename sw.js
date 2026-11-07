@@ -1,5 +1,5 @@
-﻿/* Service worker de la versiÃ³n web (iPhone): guarda la app completa en el telÃ©fono para usarla sin seÃ±al.
-   Al publicar una versiÃ³n nueva, cambiar VERSION para que los telÃ©fonos descarguen los archivos nuevos. */
+﻿/* Service worker de la versión web (iPhone): guarda la app completa en el teléfono para usarla sin señal.
+   Al publicar una versión nueva, cambiar VERSION para que los teléfonos descarguen los archivos nuevos. */
 const VERSION = 'recorrido-v2';
 const ARCHIVOS = [
   './', 'index.html', 'style.css', 'app.js', 'manifest.json',
@@ -19,7 +19,7 @@ self.addEventListener('activate', ev => {
     .then(() => self.clients.claim()));
 });
 
-// Archivos de la app: primero del telÃ©fono (funciona sin seÃ±al). Mapas satelitales y demÃ¡s: directo a internet.
+// Archivos de la app: primero del teléfono (funciona sin señal). Mapas satelitales y demás: directo a internet.
 self.addEventListener('fetch', ev => {
   const url = new URL(ev.request.url);
   if (ev.request.method !== 'GET' || url.origin !== self.location.origin) return;
