@@ -66,6 +66,20 @@
 
   <!-- ESTRUCTURA -->
   <section id="vEst" class="view" hidden>
+    <!-- Lo primero al registrar una estructura: la foto (de ella salen ubicación, tipo, estado y descripción) -->
+    <div class="card">
+      <h3>Fotografías</h3>
+      <div class="row2">
+        <button id="btnCam" class="btn primary">Tomar foto</button>
+        <button id="btnGal" class="btn ghost">Galería</button>
+      </div>
+      <div id="fFotos" class="fotos" style="margin-top:10px"></div>
+      <button id="btnGuardarFotos" type="button" class="btn ghost block" hidden></button>
+      <label class="chk"><input id="fMejorar" type="checkbox" checked> Mejorar imagen automáticamente (contraste, color y nitidez)</label>
+      <label class="chk"><input id="fGaleria" type="checkbox" checked> Guardar las fotos de la cámara en la galería (con ubicación GPS)</label>
+      <p class="hint">La primera foto es la principal del reporte. Toca una foto para hacerla principal.</p>
+    </div>
+
     <div class="card">
       <div class="row2">
         <label>Clave
@@ -97,18 +111,6 @@
       <button id="btnFijar" class="btn ghost block">Usar ubicación actual</button>
     </div>
 
-    <div class="card">
-      <h3>Fotografías</h3>
-      <div id="fFotos" class="fotos"></div>
-      <div class="row2">
-        <button id="btnCam" class="btn primary">Tomar foto</button>
-        <button id="btnGal" class="btn ghost">Galería</button>
-      </div>
-      <button id="btnGuardarFotos" type="button" class="btn ghost block" hidden></button>
-      <label class="chk"><input id="fMejorar" type="checkbox" checked> Mejorar imagen automáticamente (contraste, color y nitidez)</label>
-      <label class="chk"><input id="fGaleria" type="checkbox" checked> Guardar las fotos de la cámara en la galería (con ubicación GPS)</label>
-      <p class="hint">La primera foto es la principal del reporte. Toca una foto para hacerla principal.</p>
-    </div>
 
     <div class="bar">
       <button id="btnEliminar" class="btn danger">Eliminar</button>
