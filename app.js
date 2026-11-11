@@ -264,8 +264,11 @@ async function renderInicio() {
         <div class="t">${esc(r.canal)}</div>
         <div class="s">${fechaTxt(r.creado)} · ${cuenta[r.id] || 0} estructuras${r.resp ? ' · ' + esc(r.resp) : ''}</div>
         ${r.tramo ? `<div class="s">${esc(r.tramo)}</div>` : ''}
+        <div class="acc">
+          <button type="button" class="btn guardar" data-exp="${r.id}">Guardar .rcanal</button>
+          <button type="button" class="btn danger" data-del="${r.id}">Borrar</button>
+        </div>
       </div>
-      <button class="x" data-del="${r.id}" aria-label="Eliminar recorrido">&#128465;</button>
     </div>`).join('') : '<div class="empty">Aún no hay recorridos guardados.</div>';
   $('#btnRespaldo').hidden = !recs.length;
   await renderAvisoRespaldo();
@@ -1634,15 +1637,33 @@ async function empaquetar(zip, r) {
   return { recorrido: r, estructuras };
 }
 
-async function exportarRecorrido() {
+/* Guarda un recorrido como .rcanal (el abierto, o el elegido desde la lista del inicio). */
+async function exportarRecorrido(r = rec) {
   busy('Preparando archivo del recorrido…');
   const zip = new JSZip();
-  const parte = await empaquetar(zip, rec);
+  const parte = await empaquetar(zip, r);
   zip.file('recorrido.json', JSON.stringify({ formato: FORMATO_REC, version: 1, exportado: Date.now(), ...parte }));
   const datos = await zip.generateAsync({ type: APP ? 'base64' : 'blob', compression: 'STORE' });
-  await guardarArchivo(`Recorrido_${slug(rec.canal)}_${hoy()}.rcanal`, datos, 'application/octet-stream',
+  await guardarArchivo(`Recorrido_${slug(r.canal)}_${hoy()}.rcanal`, datos, 'application/octet-stream',
     `<br><br>${parte.estructuras.length} estructura(s) con sus fotos. Ábrelo en otro teléfono con la app <b>Recorrido Canal</b> ` +
     '(tocando el archivo o con "Abrir recorrido desde archivo").');
+}
+
+/* ---------- Actualización de la versión web: primero respaldar, luego actualizar ---------- */
+
+let swEnEspera = null;
+const respaldoReciente = () => Date.now() - (+lsGet('ultimoRespaldo') || 0) < 3600000; // última hora
+
+function mostrarActualizacion(sw) {
+  swEnEspera = sw;
+  $('#avisoActualizacion').hidden = false;
+  estadoActualizacion();
+}
+
+function estadoActualizacion() {
+  $('#actEstado').textContent = respaldoReciente()
+    ? '✓ Respaldo hecho. Ya puedes actualizar.'
+    : 'Toca "Respaldar todo", elige Guardar en Archivos (o Drive) y después "Actualizar ahora".';
 }
 
 /* Recordatorio en el inicio cuando hay trabajo sin respaldar desde hace más de 3 días (o nunca). */
@@ -1801,6 +1822,8 @@ async function init() {
   $('#listaRec').onclick = ev => {
     const del = ev.target.closest('[data-del]');
     if (del) { ejecutar(() => eliminarRecorrido(del.dataset.del)); return; }
+    const exp = ev.target.closest('[data-exp]');
+    if (exp) { ejecutar(async () => exportarRecorrido(await dbGet('recorridos', exp.dataset.exp))); return; }
     const it = ev.target.closest('.item');
     if (it) ejecutar(async () => { rec = await dbGet('recorridos', it.dataset.id); await renderRec(); });
   };
@@ -1893,15 +1916,45 @@ async function init() {
     else compartirArchivos([new File([ultimo.blob], ultimo.nombre, { type: ultimo.mime })]);
   };
   $('#btnGuardarFotos').onclick = () => ejecutar(guardarFotosPendientes);
+  $('#btnActRespaldo').onclick = () => ejecutar(async () => { await respaldarTodo(); estadoActualizacion(); });
+  $('#btnActAplicar').onclick = () => {
+    if (!swEnEspera) return;
+    if (!respaldoReciente() && !confirm('Aún no has respaldado tus recorridos.\n\nTus recorridos se conservan al actualizar, ' +
+      'pero se recomienda respaldar primero. ¿Actualizar de todos modos?')) return;
+    busy('Actualizando…');
+    // Cuando la versión nueva queda activa, se recarga la pantalla para usarla
+    swEnEspera.addEventListener('statechange', () => {
+      if (swEnEspera.state === 'activated') { lsSet('recienActualizada', '1'); location.reload(); }
+    });
+    swEnEspera.postMessage('actualizar');
+  };
 
   if (!APP) {
     // Versión web (iPhone): funciona sin señal y conserva los datos
     if ('serviceWorker' in navigator && (location.protocol === 'https:' || location.hostname === 'localhost')) {
       const habiaVersion = !!navigator.serviceWorker.controller;
+      let recargando = false;
       navigator.serviceWorker.addEventListener('controllerchange', () => {
-        if (habiaVersion) toast('App actualizada. Tus recorridos y fotos se conservan.', 5000);
+        // Ya se aplicó la versión nueva: se recarga para usarla (los recorridos siguen en el teléfono)
+        if (!habiaVersion || recargando) return;
+        recargando = true;
+        lsSet('recienActualizada', '1');
+        location.reload();
       });
-      navigator.serviceWorker.register('sw.js').catch(e => console.warn('Sin modo sin conexión', e));
+      navigator.serviceWorker.register('sw.js').then(reg => {
+        if (reg.waiting && navigator.serviceWorker.controller) mostrarActualizacion(reg.waiting);
+        reg.addEventListener('updatefound', () => {
+          const nuevo = reg.installing;
+          nuevo.addEventListener('statechange', () => {
+            if (nuevo.state === 'installed' && navigator.serviceWorker.controller) mostrarActualizacion(nuevo);
+          });
+        });
+        reg.update().catch(() => {});
+      }).catch(e => console.warn('Sin modo sin conexión', e));
+      if (lsGet('recienActualizada')) {
+        lsSet('recienActualizada', '');
+        setTimeout(() => toast('App actualizada. Tus recorridos y fotos se conservan.', 5000), 800);
+      }
     }
     if (navigator.storage && navigator.storage.persist) navigator.storage.persist().catch(() => {});
     $('#inKmz').removeAttribute('accept'); // iOS no reconoce .kmz como tipo y lo deja gris

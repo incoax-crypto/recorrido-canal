@@ -25,6 +25,17 @@
 </header>
 
 <main>
+  <!-- Aviso de versión nueva: primero respaldar, luego actualizar -->
+  <div id="avisoActualizacion" class="card actualiza" hidden>
+    <h3>Hay una versión nueva de la app</h3>
+    <p>Tus recorridos se conservan al actualizar. Por seguridad, primero guarda un respaldo de todos tus recorridos.</p>
+    <div class="row2">
+      <button id="btnActRespaldo" type="button" class="btn guardar">1. Respaldar todo</button>
+      <button id="btnActAplicar" type="button" class="btn primary">2. Actualizar ahora</button>
+    </div>
+    <p id="actEstado" class="hint"></p>
+  </div>
+
   <!-- INICIO -->
   <section id="vInicio" class="view">
     <div class="card">

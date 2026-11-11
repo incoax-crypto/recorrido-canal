@@ -1,6 +1,7 @@
 ﻿/* Service worker de la versión web (iPhone): guarda la app completa en el teléfono para usarla sin señal.
-   Al publicar una versión nueva, cambiar VERSION para que los teléfonos descarguen los archivos nuevos. */
-const VERSION = 'recorrido-v4';
+   Al publicar una versión nueva, cambiar VERSION para que los teléfonos descarguen los archivos nuevos.
+   La versión nueva queda en espera hasta que el usuario toca "Actualizar ahora" (después de respaldar). */
+const VERSION = 'recorrido-v5';
 const ARCHIVOS = [
   './', 'index.html', 'style.css', 'app.js', 'manifest.json',
   'lib/jszip.min.js', 'lib/docx.umd.js', 'lib/tf.min.js',
@@ -10,9 +11,15 @@ const ARCHIVOS = [
 ];
 
 self.addEventListener('install', ev => {
-  ev.waitUntil(caches.open(VERSION).then(c => c.addAll(ARCHIVOS)).then(() => self.skipWaiting()));
+  ev.waitUntil(caches.open(VERSION).then(c => c.addAll(ARCHIVOS)));
 });
 
+// La app pide aplicar la actualización cuando el usuario lo decide
+self.addEventListener('message', ev => {
+  if (ev.data === 'actualizar') self.skipWaiting();
+});
+
+// Solo se borran archivos del programa de versiones anteriores; los recorridos (IndexedDB) nunca se tocan
 self.addEventListener('activate', ev => {
   ev.waitUntil(caches.keys()
     .then(ks => Promise.all(ks.filter(k => k !== VERSION).map(k => caches.delete(k))))
