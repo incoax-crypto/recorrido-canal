@@ -1,6 +1,6 @@
 ﻿/* Service worker de la versión web (iPhone): guarda la app completa en el teléfono para usarla sin señal.
    Al publicar una versión nueva, cambiar VERSION para que los teléfonos descarguen los archivos nuevos. */
-const VERSION = 'recorrido-v3';
+const VERSION = 'recorrido-v4';
 const ARCHIVOS = [
   './', 'index.html', 'style.css', 'app.js', 'manifest.json',
   'lib/jszip.min.js', 'lib/docx.umd.js', 'lib/tf.min.js',

@@ -256,7 +256,8 @@ async function renderInicio() {
   if (trazoNuevo) { startGPS(); autoCanal(); }
   const recs = (await dbAll('recorridos')).sort((a, b) => b.creado - a.creado);
   const cuenta = {};
-  (await dbAll('estructuras')).forEach(e => { cuenta[e.recId] = (cuenta[e.recId] || 0) + 1; });
+  // Solo se cuentan (sin cargar estructuras ni fotos en memoria)
+  for (const r of recs) cuenta[r.id] = await prom(store('estructuras').index('rec').count(r.id));
   $('#listaRec').innerHTML = recs.length ? recs.map(r => `
     <div class="item" data-id="${r.id}">
       <div class="info">
@@ -266,6 +267,8 @@ async function renderInicio() {
       </div>
       <button class="x" data-del="${r.id}" aria-label="Eliminar recorrido">&#128465;</button>
     </div>`).join('') : '<div class="empty">Aún no hay recorridos guardados.</div>';
+  $('#btnRespaldo').hidden = !recs.length;
+  await renderAvisoRespaldo();
 }
 
 async function iniciarRecorrido() {
@@ -309,7 +312,7 @@ async function renderRec() {
   $('#listaEst').innerHTML = ests.length ? ests.map(e => {
     const f = e.fotos[0];
     return `<div class="item" data-id="${e.id}">
-      ${f ? `<img src="${objUrl(f.blob)}" alt="">` : '<div class="noimg"></div>'}
+      ${f ? `<img src="${objUrl(f.mini || f.blob)}" alt="" loading="lazy">` : '<div class="noimg"></div>'}
       <div class="info">
         <div class="t">${esc(e.codigo)} · ${esc(tipoDe(e))}<span class="badge" style="background:${COLOR_ESTADO[e.estado] || '#78909c'}">${esc(e.estado || 's/e')}</span></div>
         <div class="s">${e.km ? 'Km ' + esc(e.km) + ' · ' : ''}${e.lat != null ? coordTxt(e.lat, e.lon) : 'Sin coordenadas'} · ${e.fotos.length} foto(s)</div>
@@ -317,6 +320,7 @@ async function renderRec() {
       </div>
     </div>`;
   }).join('') : '<div class="empty">Toca <b>+ Estructura</b> para registrar la primera estructura del recorrido.</div>';
+  asegurarMinis(ests); // en segundo plano, para fotos de versiones anteriores
 }
 
 /* Croquis sin internet: trazo del canal, estructuras y posición actual. */
@@ -564,7 +568,7 @@ function renderFotos() {
   liberarUrls();
   $('#fFotos').innerHTML = cur.fotos.map((f, i) => `
     <div class="foto" data-i="${i}">
-      <img src="${objUrl(f.blob)}" alt="Foto ${i + 1}">
+      <img src="${objUrl(f.mini || f.blob)}" alt="Foto ${i + 1}">
       <button class="del" data-del="${i}" aria-label="Quitar foto">&times;</button>
       ${i === 0 ? '<span class="main">Principal</span>' : ''}
     </div>`).join('');
@@ -603,7 +607,7 @@ async function agregarFotos(files, fuente) {
     if (sinGpsGaleria) toast(`${sinGpsGaleria === 1 ? 'La foto no tiene' : sinGpsGaleria + ' fotos no tienen'} coordenadas en sus metadatos. Usa "Usar ubicación actual" si estás en la estructura.`, 5000);
     else if (cur.lat == null) toast('Sin GPS todavía: la foto se guardó sin coordenadas');
   } catch (err) {
-    alert('No se pudo procesar la foto: ' + err.message);
+    alert('No se pudo procesar la foto: ' + mensajeError(err));
   } finally {
     idle();
   }
@@ -628,7 +632,7 @@ async function copiarAGaleria(foto) {
   const desc = `${canal} | ${codigo}${tipoDe(cur) ? ' | ' + tipoDe(cur) : ''}` + (foto.lat != null ? ` | ${coordTxt(foto.lat, foto.lon)}` : '');
   if (APP) {
     if (Android.guardarEnGaleria) Android.guardarEnGaleria(nombre, await blobB64(foto.blob),
-      foto.lat ?? 999, foto.lon ?? 999, foto.alt ?? -99999, foto.fecha, desc); // 999 / -99999 = sin dato
+      foto.lat ?? 999, foto.lon ?? 999, foto.alt ?? -99999, foto.fecha, desc, rec.canal); // 999 / -99999 = sin dato
     return;
   }
   const bytes = conExif(new Uint8Array(await foto.blob.arrayBuffer()), { lat: foto.lat, lon: foto.lon, alt: foto.alt, fecha: foto.fecha, desc });
@@ -729,6 +733,51 @@ window.appBack = function () {
 
 /* ---------- Fotos georreferenciadas ---------- */
 
+/* iOS limita la memoria total de lienzos (canvas) y la libera tarde: se suelta en cuanto se termina de usar. */
+function soltar(...lienzos) { for (const c of lienzos) if (c) { c.width = 0; c.height = 0; } }
+
+/* Miniatura ligera (360 px) para listas y cuadrícula de fotos: evita abrir decenas de fotos grandes a la vez. */
+async function miniatura(fuente, max = 360) {
+  const w = fuente.naturalWidth || fuente.width, h = fuente.naturalHeight || fuente.height;
+  const k = Math.min(1, max / Math.max(w, h));
+  const m = document.createElement('canvas');
+  m.width = Math.round(w * k); m.height = Math.round(h * k);
+  m.getContext('2d').drawImage(fuente, 0, 0, m.width, m.height);
+  const b = await new Promise(r => m.toBlob(r, 'image/jpeg', 0.75));
+  soltar(m);
+  return b;
+}
+
+/* Fotos guardadas con versiones anteriores no tienen miniatura: se crea una por una y se guarda. */
+let creandoMinis = false;
+async function asegurarMinis(ests) {
+  if (creandoMinis) return;
+  creandoMinis = true;
+  try {
+    for (const e of ests) {
+      const faltan = e.fotos.map((f, i) => f.mini ? -1 : i).filter(i => i >= 0);
+      if (!faltan.length) continue;
+      const minis = {};
+      for (const i of faltan) {
+        const img = await loadImage(e.fotos[i].blob);
+        minis[i] = await miniatura(img);
+        img.src = '';
+      }
+      // Se relee el registro para no pisar cambios hechos mientras tanto
+      const fresco = await dbGet('estructuras', e.id);
+      if (!fresco) continue;
+      for (const i of faltan) if (fresco.fotos[i] && fresco.fotos[i].fecha === e.fotos[i].fecha) fresco.fotos[i].mini = minis[i];
+      await dbPut('estructuras', fresco);
+      const el = vista === 'rec' && document.querySelector(`#listaEst .item[data-id="${e.id}"] img`);
+      if (el && minis[0]) el.src = objUrl(minis[0]);
+    }
+  } catch (err) {
+    console.warn('Miniaturas', err);
+  } finally {
+    creandoMinis = false;
+  }
+}
+
 function loadImage(blob) {
   return new Promise((res, rej) => {
     const u = URL.createObjectURL(blob);
@@ -801,7 +850,9 @@ async function procesarFoto(file, fuente, i = 0) {
   const c = document.createElement('canvas');
   c.width = w; c.height = h;
   const g = c.getContext('2d');
+  if (!g) throw new Error('el teléfono se quedó sin memoria para procesar fotos; cierra y vuelve a abrir la app');
   g.drawImage(img, 0, 0, w, h);
+  img.src = '';
   const emb = await huella(c);              // para identificar el tipo (antes del sello)
   if (lsGet('mejorar') !== '0') mejorarImagen(c);
 
@@ -821,7 +872,9 @@ async function procesarFoto(file, fuente, i = 0) {
   lineas.forEach((t, i) => g.fillText(t, fs * 0.6, h - bh + fs * 0.4 + i * lh, w - fs * 1.2));
 
   const blob = await new Promise(r => c.toBlob(r, 'image/jpeg', 0.92));
-  return { blob, w, h, emb, lat: geo ? geo.lat : null, lon: geo ? geo.lon : null, acc: geo ? geo.acc : null, alt: geo ? geo.alt : null, fecha, fuente };
+  const mini = await miniatura(c);
+  soltar(c);
+  return { blob, mini, w, h, emb, lat: geo ? geo.lat : null, lon: geo ? geo.lon : null, acc: geo ? geo.acc : null, alt: geo ? geo.alt : null, fecha, fuente };
 }
 
 /* ---------- Mejora automática de imagen (sin internet) ---------- */
@@ -878,6 +931,7 @@ function mejorarImagen(c) {
     d[i] += 0.55 * (d[i] - bd[i]); d[i + 1] += 0.55 * (d[i + 1] - bd[i + 1]); d[i + 2] += 0.55 * (d[i + 2] - bd[i + 2]);
   }
   g.putImageData(im, 0, 0);
+  soltar(bc);
 }
 
 /* Desenfoque de caja 3×3 (en dos pasadas) para la máscara de nitidez cuando no hay ctx.filter. */
@@ -907,7 +961,10 @@ async function reducir(blob, max) {
   const c = document.createElement('canvas');
   c.width = Math.round(img.naturalWidth * k); c.height = Math.round(img.naturalHeight * k);
   c.getContext('2d').drawImage(img, 0, 0, c.width, c.height);
-  return new Promise(r => c.toBlob(r, 'image/jpeg', 0.88));
+  img.src = '';
+  const b = await new Promise(r => c.toBlob(r, 'image/jpeg', 0.88));
+  soltar(c);
+  return b;
 }
 
 /* ---------- Identificación del tipo de estructura (aprende de las fotos del usuario) ---------- */
@@ -943,6 +1000,7 @@ async function huella(c) {
     const f = m.predict(x).mean([1, 2]).squeeze();
     return f.div(f.norm());
   });
+  soltar(t);
   const arr = await v.data();
   v.dispose();
   return new Float32Array(arr);
@@ -1248,8 +1306,10 @@ const canvasBytes = c => new Promise(r => c.toBlob(r, 'image/jpeg', 0.88)).then(
 /* ---------- Guardar / compartir archivos ---------- */
 
 let ultimo = null;
-async function guardarArchivo(nombre, b64, mime, nota = '') {
+/* `datos`: texto base64 (Android) o Blob (versión web: evita duplicar el archivo en memoria). */
+async function guardarArchivo(nombre, datos, mime, nota = '') {
   if (APP) {
+    const b64 = typeof datos === 'string' ? datos : await blobB64(datos);
     Android.startFile(nombre);
     const CH = 1 << 20;
     for (let i = 0; i < b64.length; i += CH) { Android.appendFile(nombre, b64.slice(i, i + CH)); await tick(); }
@@ -1262,9 +1322,8 @@ async function guardarArchivo(nombre, b64, mime, nota = '') {
     $('#dlg').hidden = false;
   } else {
     // Versión web (iPhone): el archivo se entrega con el menú Compartir (Guardar en Archivos, WhatsApp, correo…)
-    const bin = atob(b64), bytes = new Uint8Array(bin.length);
-    for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
-    ultimo = { nombre, mime, blob: new Blob([bytes], { type: mime }) };
+    const blob = typeof datos === 'string' ? new Blob([b64Bytes(datos)], { type: mime }) : new Blob([datos], { type: mime });
+    ultimo = { nombre, mime, blob };
     idle();
     $('#dlgMsg').innerHTML = `Archivo listo: <b>${esc(nombre)}</b><br>Usa <b>Compartir</b> y elige <i>Guardar en Archivos</i>, WhatsApp o correo.${nota}`;
     $('#dlg').hidden = false;
@@ -1287,9 +1346,19 @@ function descargar(blob, nombre) {
   setTimeout(() => URL.revokeObjectURL(url), 60000);
 }
 
+/* Mensaje entendible para el usuario, con los casos conocidos del teléfono. */
+function mensajeError(e) {
+  const nombre = e && e.name, texto = String((e && e.message) || e || 'desconocido');
+  if (nombre === 'QuotaExceededError' || /quota/i.test(texto))
+    return 'el teléfono no tiene espacio para guardar más. Respalda tus recorridos y libera espacio (fotos, videos, apps).';
+  if (/memory|memoria|canvas/i.test(texto))
+    return 'el teléfono se quedó sin memoria. Cierra la app por completo y vuelve a abrirla; tus datos se conservan.';
+  return texto;
+}
+
 async function ejecutar(fn) {
   try { await fn(); }
-  catch (e) { console.error(e); alert('Error: ' + (e && e.message || e)); }
+  catch (e) { console.error(e); alert('Error: ' + mensajeError(e)); }
   finally { idle(); }
 }
 
@@ -1314,6 +1383,7 @@ async function generarWord() {
     const m = await renderMap(fitView(extension, 1000, 620), 1000, 620, marcas.map(k => ({ ...k, color: '#e53935', grande: true })), lineas);
     if (!m.completo) mapasFallidos++;
     general = await canvasBytes(m.canvas);
+    soltar(m.canvas);
   }
   const mapas = {};
   for (let i = 0; i < geo.length; i++) {
@@ -1323,9 +1393,10 @@ async function generarWord() {
     const propia = [{ id: e.id, lat: e.lat, lon: e.lon, label: e.codigo, grande: true, color: '#e53935' }];
     const dibujar = z => renderMap({ z, cx: lon2px(e.lon, z), cy: lat2px(e.lat, z) }, 640, 480, propia, lineas);
     let m = await dibujar(18);
-    if (!m.completo || sinImagen(m.canvas)) m = await dibujar(17);
+    if (!m.completo || sinImagen(m.canvas)) { soltar(m.canvas); m = await dibujar(17); }
     if (!m.completo) mapasFallidos++;
     mapas[e.id] = await canvasBytes(m.canvas);
+    soltar(m.canvas);
   }
 
   busy('Armando documento Word…');
@@ -1461,7 +1532,7 @@ async function generarWord() {
     }]
   });
   busy('Guardando Word…');
-  const b64 = await Packer.toBase64String(doc);
+  const b64 = APP ? await Packer.toBase64String(doc) : await Packer.toBlob(doc);
   const sinCoord = ests.length - geo.length;
   let nota = '';
   if (mapasFallidos) nota += `<br><br>⚠ ${mapasFallidos} mapa(s) quedaron incompletos por falta de señal. Genera el Word de nuevo con WiFi o mejor señal.`;
@@ -1527,7 +1598,7 @@ ${marcas}
 </kml>`;
   zip.file('doc.kml', kml);
   for (const [n, b] of fotos) zip.file(n, await reducir(b, 1280), { compression: 'STORE' });
-  const b64 = await zip.generateAsync({ type: 'base64', compression: 'DEFLATE' });
+  const b64 = await zip.generateAsync({ type: APP ? 'base64' : 'blob', compression: 'DEFLATE' });
   const sinCoord = ests.length - geo.length;
   await guardarArchivo(`${slug(rec.canal)}_${hoy()}.kmz`, b64, 'application/vnd.google-earth.kmz',
     sinCoord ? `<br><br>⚠ ${sinCoord} estructura(s) sin coordenadas no se incluyeron.` : '');
@@ -1545,41 +1616,72 @@ function bytesB64(u8) {
 }
 const b64Bytes = b => Uint8Array.from(atob(b), c => c.charCodeAt(0));
 
-async function exportarRecorrido() {
-  busy('Preparando archivo del recorrido…');
-  const ests = await estructurasDe(rec.id);
-  const zip = new JSZip();
-  const datos = { formato: FORMATO_REC, version: 1, exportado: Date.now(), recorrido: rec, estructuras: [] };
+/* Agrega al ZIP las fotos de un recorrido y devuelve su parte del recorrido.json. */
+async function empaquetar(zip, r) {
+  const ests = await estructurasDe(r.id);
+  const estructuras = [];
   for (const e of ests) {
     const { fotos, nuevo, tipoManual, estadoManual, descAuto, ...resto } = e;
     const fotosJson = [];
     for (const [i, f] of fotos.entries()) {
       const archivo = `fotos/${slug(e.codigo)}_${i + 1}_${e.id}.jpg`;
       zip.file(archivo, f.blob);
-      const { blob, emb, ...meta } = f;
+      const { blob, mini, emb, ...meta } = f; // la miniatura se vuelve a crear al abrirlo
       fotosJson.push({ ...meta, archivo, emb: emb ? bytesB64(new Uint8Array(emb.buffer, emb.byteOffset, emb.byteLength)) : null });
     }
-    datos.estructuras.push({ ...resto, fotos: fotosJson });
+    estructuras.push({ ...resto, fotos: fotosJson });
   }
-  zip.file('recorrido.json', JSON.stringify(datos));
-  const b64 = await zip.generateAsync({ type: 'base64', compression: 'STORE' });
-  await guardarArchivo(`Recorrido_${slug(rec.canal)}_${hoy()}.rcanal`, b64, 'application/octet-stream',
-    `<br><br>${ests.length} estructura(s) con sus fotos. Ábrelo en otro teléfono con la app <b>Recorrido Canal</b> ` +
+  return { recorrido: r, estructuras };
+}
+
+async function exportarRecorrido() {
+  busy('Preparando archivo del recorrido…');
+  const zip = new JSZip();
+  const parte = await empaquetar(zip, rec);
+  zip.file('recorrido.json', JSON.stringify({ formato: FORMATO_REC, version: 1, exportado: Date.now(), ...parte }));
+  const datos = await zip.generateAsync({ type: APP ? 'base64' : 'blob', compression: 'STORE' });
+  await guardarArchivo(`Recorrido_${slug(rec.canal)}_${hoy()}.rcanal`, datos, 'application/octet-stream',
+    `<br><br>${parte.estructuras.length} estructura(s) con sus fotos. Ábrelo en otro teléfono con la app <b>Recorrido Canal</b> ` +
     '(tocando el archivo o con "Abrir recorrido desde archivo").');
 }
 
-/* Importa un archivo .rcanal: si el recorrido ya existe, pregunta si reemplazarlo o guardarlo como copia. */
-async function importarRecorrido(bytes) {
-  busy('Abriendo recorrido…');
-  let zip, datos;
-  try {
-    zip = await JSZip.loadAsync(bytes);
-    datos = JSON.parse(await zip.file('recorrido.json').async('string'));
-  } catch (e) {
-    throw new Error('el archivo no es un recorrido de la app (.rcanal) o está dañado');
+/* Recordatorio en el inicio cuando hay trabajo sin respaldar desde hace más de 3 días (o nunca). */
+async function renderAvisoRespaldo() {
+  const caja = $('#avisoRespaldo');
+  const ultimoR = +lsGet('ultimoRespaldo') || 0;
+  const n = await prom(store('estructuras').count());
+  const dias = Math.floor((Date.now() - ultimoR) / 86400000);
+  caja.hidden = !n || dias < 3;
+  caja.innerHTML = ultimoR
+    ? `Tu último respaldo fue hace ${dias} días. Respalda tus recorridos y guarda el archivo fuera del teléfono.`
+    : `Tienes ${n} estructura(s) sin respaldo. Respalda tus recorridos y guarda el archivo fuera del teléfono ` +
+      '(si se borra la app, sus datos se pierden).';
+}
+
+/* Respaldo de TODOS los recorridos del teléfono en un solo archivo .rcanal. */
+async function respaldarTodo() {
+  const recs = (await dbAll('recorridos')).sort((a, b) => a.creado - b.creado);
+  if (!recs.length) { toast('No hay recorridos para respaldar'); return; }
+  const zip = new JSZip();
+  const partes = [];
+  for (const [i, r] of recs.entries()) {
+    busy(`Preparando respaldo (${i + 1} de ${recs.length})…`);
+    partes.push(await empaquetar(zip, r));
   }
-  if (datos.formato !== FORMATO_REC) throw new Error('el archivo no es un recorrido de la app (.rcanal)');
-  let r = datos.recorrido, sufijo = '';
+  zip.file('recorrido.json', JSON.stringify({ formato: FORMATO_REC, version: 2, exportado: Date.now(), recorridos: partes }));
+  busy('Armando archivo de respaldo…');
+  const datos = await zip.generateAsync({ type: APP ? 'base64' : 'blob', compression: 'STORE' });
+  const n = partes.reduce((s, p) => s + p.estructuras.length, 0);
+  lsSet('ultimoRespaldo', String(Date.now()));
+  await guardarArchivo(`Respaldo_RecorridoCanal_${hoy()}.rcanal`, datos, 'application/octet-stream',
+    `<br><br>${recs.length} recorrido(s) y ${n} estructura(s). Guárdalo fuera del teléfono (Archivos, Drive o correo). ` +
+    'Para recuperarlo usa "Abrir recorrido desde archivo".');
+  await renderAvisoRespaldo();
+}
+
+/* Importa un recorrido (de un archivo .rcanal) a este teléfono. Devuelve el recorrido guardado. */
+async function importarUno(zip, parte) {
+  let r = parte.recorrido, sufijo = '';
   const existe = await dbGet('recorridos', r.id);
   if (existe) {
     idle();
@@ -1589,9 +1691,9 @@ async function importarRecorrido(bytes) {
       sufijo = '_c' + Date.now();
       r = { ...r, id: r.id + sufijo, canal: r.canal + ' (copia)' };
     }
-    busy('Abriendo recorrido…');
   }
-  for (const e of datos.estructuras) {
+  busy(`Abriendo "${r.canal}"…`);
+  for (const e of parte.estructuras) {
     const fotos = [];
     for (const f of e.fotos) {
       const arch = zip.file(f.archivo);
@@ -1605,9 +1707,31 @@ async function importarRecorrido(bytes) {
     await aprender(est); // lo aprendido en el otro teléfono también sirve aquí
   }
   await dbPut('recorridos', r);
-  rec = r;
-  await renderRec();
-  toast(`Recorrido abierto: ${datos.estructuras.length} estructura(s)`, 4000);
+  return r;
+}
+
+/* Abre un archivo .rcanal: un recorrido o un respaldo con varios. Si alguno ya existe, pregunta qué hacer. */
+async function importarRecorrido(bytes) {
+  busy('Abriendo recorrido…');
+  let zip, datos;
+  try {
+    zip = await JSZip.loadAsync(bytes);
+    datos = JSON.parse(await zip.file('recorrido.json').async('string'));
+  } catch (e) {
+    throw new Error('el archivo no es un recorrido de la app (.rcanal) o está dañado');
+  }
+  if (datos.formato !== FORMATO_REC) throw new Error('el archivo no es un recorrido de la app (.rcanal)');
+  const partes = datos.recorridos || [datos];
+  let ultimoAbierto = null, n = 0;
+  for (const p of partes) { ultimoAbierto = await importarUno(zip, p); n += p.estructuras.length; }
+  if (partes.length === 1) {
+    rec = ultimoAbierto;
+    await renderRec();
+    toast(`Recorrido abierto: ${n} estructura(s)`, 4000);
+  } else {
+    await renderInicio();
+    toast(`Respaldo abierto: ${partes.length} recorridos, ${n} estructura(s)`, 5000);
+  }
 }
 
 /* Android: archivo .rcanal abierto desde WhatsApp, Archivos, correo… (lo entrega MainActivity en trozos). */
@@ -1690,6 +1814,7 @@ async function init() {
   $('#btnCsv').onclick = () => ejecutar(generarCSV);
   $('#btnExportar').onclick = () => ejecutar(exportarRecorrido);
   $('#btnImportar').onclick = () => { $('#inRec').value = ''; $('#inRec').click(); };
+  $('#btnRespaldo').onclick = () => ejecutar(respaldarTodo);
   $('#inRec').onchange = ev => {
     const f = ev.target.files[0];
     if (f) ejecutar(async () => importarRecorrido(new Uint8Array(await f.arrayBuffer())));
@@ -1772,6 +1897,10 @@ async function init() {
   if (!APP) {
     // Versión web (iPhone): funciona sin señal y conserva los datos
     if ('serviceWorker' in navigator && (location.protocol === 'https:' || location.hostname === 'localhost')) {
+      const habiaVersion = !!navigator.serviceWorker.controller;
+      navigator.serviceWorker.addEventListener('controllerchange', () => {
+        if (habiaVersion) toast('App actualizada. Tus recorridos y fotos se conservan.', 5000);
+      });
       navigator.serviceWorker.register('sw.js').catch(e => console.warn('Sin modo sin conexión', e));
     }
     if (navigator.storage && navigator.storage.persist) navigator.storage.persist().catch(() => {});
@@ -1786,4 +1915,8 @@ async function init() {
   window.__abrirEntrante(); // ¿la app se abrió tocando un archivo .rcanal?
 }
 
-init().catch(e => alert('Error al iniciar: ' + e.message));
+// Cualquier error inesperado se muestra (en vez de fallar en silencio) para poder reportarlo
+window.addEventListener('error', ev => toast('Error: ' + mensajeError(ev.error || ev.message), 7000));
+window.addEventListener('unhandledrejection', ev => toast('Error: ' + mensajeError(ev.reason), 7000));
+
+init().catch(e => alert('Error al iniciar: ' + mensajeError(e)));
