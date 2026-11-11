@@ -72,6 +72,29 @@ input:focus, select:focus, textarea:focus { outline: 2px solid var(--azul2); bor
 .sug.nueva { background: #eef3f8; border-left-color: #1565c0; }
 .chk { display: flex; align-items: center; gap: 8px; font-size: 14px; color: var(--txt); margin-top: 10px; }
 .chk input { width: 22px; height: 22px; margin: 0; flex: none; }
+.foto .ver { position: absolute; top: 4px; left: 4px; width: 30px; height: 30px; border-radius: 50%; border: 0;
+  background: rgba(0,0,0,.6); color: #fff; font-size: 15px; line-height: 30px; padding: 0; }
+#visor { position: fixed; inset: 0; z-index: 40; background: rgba(0,0,0,.92); display: flex; flex-direction: column;
+  align-items: center; justify-content: center; gap: 10px; padding: 16px; }
+#visor img { max-width: 100%; max-height: calc(100vh - 110px); object-fit: contain; }
+#visorPie { color: #fff; font-size: 14px; text-align: center; }
+#soltarAviso { display: none; position: fixed; inset: 12px; z-index: 50; border: 4px dashed #ef6c00; border-radius: 16px;
+  background: rgba(13,71,161,.88); color: #fff; font-size: 24px; font-weight: 700; align-items: center; justify-content: center; text-align: center; pointer-events: none; }
+body.soltar #soltarAviso { display: flex; }
+
+/* Pantalla grande (PC o tableta): más espacio, estructuras en dos columnas, fotos más grandes */
+@media (min-width: 900px) {
+  main { max-width: 1100px; }
+  #listaEst { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+  #listaEst .item { margin-bottom: 0; }
+  #listaEst .item img, #listaEst .item .noimg { width: 110px; height: 110px; }
+  #listaRec { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+  #listaRec .item { margin-bottom: 0; }
+  .fotos { grid-template-columns: repeat(5, 1fr); }
+  .fab { right: calc(50% - 530px); }
+  .bar { left: calc(50% - 550px); right: calc(50% - 550px); border-radius: 12px 12px 0 0; }
+}
+
 .hint { font-size: 13px; color: var(--sub); margin: 8px 0 0; }
 .trz { margin-top: 8px; padding-top: 8px; border-top: 1px dashed var(--borde); font-family: system-ui, sans-serif; }
 .trz .btn { min-height: 36px; padding: 6px 12px; margin-top: 6px; font-size: 14px; }

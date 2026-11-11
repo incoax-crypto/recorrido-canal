@@ -573,8 +573,25 @@ function renderFotos() {
     <div class="foto" data-i="${i}">
       <img src="${objUrl(f.mini || f.blob)}" alt="Foto ${i + 1}">
       <button class="del" data-del="${i}" aria-label="Quitar foto">&times;</button>
+      <button class="ver" data-ver="${i}" aria-label="Ver foto completa">&#128269;</button>
       ${i === 0 ? '<span class="main">Principal</span>' : ''}
     </div>`).join('');
+}
+
+/* Muestra una foto en tamaño completo (toca para cerrar). */
+let urlVisor = null;
+function verFoto(f) {
+  if (!f) return;
+  if (urlVisor) URL.revokeObjectURL(urlVisor);
+  urlVisor = URL.createObjectURL(f.blob);
+  $('#visorImg').src = urlVisor;
+  $('#visorPie').textContent = f.lat != null ? `${coordTxt(f.lat, f.lon)} · ${fechaTxt(f.fecha)} ${horaTxt(f.fecha)}` : `${fechaTxt(f.fecha)} ${horaTxt(f.fecha)}`;
+  $('#visor').hidden = false;
+}
+function cerrarVisor() {
+  $('#visor').hidden = true;
+  $('#visorImg').removeAttribute('src');
+  if (urlVisor) { URL.revokeObjectURL(urlVisor); urlVisor = null; }
 }
 
 async function fijarUbicacion() {
@@ -728,6 +745,7 @@ function salirForm() {
 
 window.appBack = function () {
   if (!$('#overlay').hidden || !$('#dlgSentido').hidden) return true;
+  if (!$('#visor').hidden) { cerrarVisor(); return true; }
   if (!$('#dlg').hidden) { $('#dlg').hidden = true; return true; }
   if (vista === 'est') { salirForm(); return true; }
   if (vista === 'rec') { renderInicio(); return true; }
@@ -1887,7 +1905,10 @@ async function init() {
   $('#btnGal').onclick = () => { $('#inGal').value = ''; $('#inGal').click(); };
   $('#inCam').onchange = ev => agregarFotos([...ev.target.files], 'cam');
   $('#inGal').onchange = ev => agregarFotos([...ev.target.files], 'gal');
+  $('#visor').onclick = cerrarVisor;
   $('#fFotos').onclick = ev => {
+    const ver = ev.target.closest('[data-ver]');
+    if (ver) { verFoto(cur.fotos[+ver.dataset.ver]); return; }
     const del = ev.target.closest('[data-del]');
     if (del) {
       if (confirm('¿Quitar esta foto?')) { cur.fotos.splice(+del.dataset.del, 1); dirty = true; renderFotos(); }
@@ -1966,6 +1987,32 @@ async function init() {
   if (trazoNuevo) { canalAuto = true; $('#btnTrazoNuevo').textContent = 'Cambiar KMZ / KML'; }
   await renderInicio();
   window.__abrirEntrante(); // ¿la app se abrió tocando un archivo .rcanal?
+
+  // PC (Edge/Chrome con la app instalada): doble clic en un .rcanal abre la app con ese archivo
+  if ('launchQueue' in window) {
+    launchQueue.setConsumer(params => {
+      if (params.files && params.files.length) abrirArchivosRecorrido(params.files.map(h => h.getFile()));
+    });
+  }
+  // PC: arrastrar y soltar archivos .rcanal sobre la ventana
+  document.addEventListener('dragover', ev => { ev.preventDefault(); document.body.classList.add('soltar'); });
+  document.addEventListener('dragleave', ev => { if (!ev.relatedTarget) document.body.classList.remove('soltar'); });
+  document.addEventListener('drop', ev => {
+    ev.preventDefault();
+    document.body.classList.remove('soltar');
+    const fs = [...(ev.dataTransfer && ev.dataTransfer.files || [])];
+    if (fs.length) abrirArchivosRecorrido(fs);
+  });
+}
+
+/* Abre uno o varios archivos .rcanal (o promesas de archivo) en orden. */
+function abrirArchivosRecorrido(archivos) {
+  ejecutar(async () => {
+    for (const a of archivos) {
+      const f = await a;
+      await importarRecorrido(new Uint8Array(await f.arrayBuffer()));
+    }
+  });
 }
 
 // Cualquier error inesperado se muestra (en vez de fallar en silencio) para poder reportarlo
