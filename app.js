@@ -48,9 +48,9 @@ const hoy = () => { const d = new Date(); return `${d.getFullYear()}${pad(d.getM
 const rad = Math.PI / 180;
 
 /* Conversión geográficas WGS84 → UTM (zona automática). */
-function utm(lat, lon) {
+function utm(lat, lon, zonaFija) {
   const a = 6378137, f = 1 / 298.257223563, k0 = 0.9996;
-  const zona = Math.min(60, Math.floor((lon + 180) / 6) + 1);
+  const zona = zonaFija || Math.min(60, Math.floor((lon + 180) / 6) + 1);
   const banda = 'CDEFGHJKLMNPQRSTUVWXX'[Math.max(0, Math.min(20, Math.floor((lat + 80) / 8)))];
   const e2 = f * (2 - f), ep2 = e2 / (1 - e2);
   const p = lat * rad, s = Math.sin(p), c = Math.cos(p), t = Math.tan(p);
@@ -1964,6 +1964,90 @@ async function generarCSV() {
   await guardarArchivo(`Tabla_${slug(rec.canal)}_${hoy()}.csv`, b64, 'text/csv');
 }
 
+/* ---------- Plano para AutoCAD (DXF en coordenadas UTM), solo en la versión de PC ---------- */
+
+const ES_PC = !APP && !/Android|iPhone|iPad|iPod|Mobile/i.test(navigator.userAgent)
+  && !(navigator.maxTouchPoints > 1 && /Mac/i.test(navigator.platform)); // iPad se presenta como Mac
+
+/* DXF R12 (ASCII): lo abre cualquier versión de AutoCAD y se puede guardar como .dwg.
+   Cada estructura queda como punto + círculo en su coordenada UTM, con su clave, tipo, Km y descripción. */
+async function generarDXF() {
+  const ests = (await estructurasDe(rec.id)).filter(e => e.lat != null);
+  if (!ests.length) { toast('No hay estructuras con coordenadas'); return; }
+  // Todas las coordenadas en la zona UTM de la primera estructura, para que el dibujo sea continuo
+  const zona = parseInt(utm(ests[0].lat, ests[0].lon).zona, 10);
+  const P = (lat, lon) => { const u = utm(lat, lon, zona); return [u.este, u.norte]; };
+  const pts = ests.map(e => P(e.lat, e.lon));
+  const xs = pts.map(p => p[0]), ys = pts.map(p => p[1]);
+  const ext = Math.max(Math.max(...xs) - Math.min(...xs), Math.max(...ys) - Math.min(...ys));
+  const h = Math.min(8, Math.max(1, ext / 200)); // altura de texto según la extensión del recorrido (m)
+
+  // Texto para AutoCAD: acentos y ñ como \U+XXXX, sin saltos de línea
+  const txt = s => String(s ?? '').replace(/[\r\n\t]+/g, ' ').trim()
+    .replace(/[^\x20-\x7e]/g, ch => '\\U+' + ch.charCodeAt(0).toString(16).toUpperCase().padStart(4, '0'));
+  const n = v => (Math.round(v * 1000) / 1000).toFixed(3);
+  const out = [];
+  const g = (...pares) => { for (let i = 0; i < pares.length; i += 2) out.push(String(pares[i]), String(pares[i + 1])); };
+
+  const CAPA_ESTADO = { 'Bueno': ['ESTRUCTURA_BUENO', 3], 'Regular': ['ESTRUCTURA_REGULAR', 2], 'Malo': ['ESTRUCTURA_MALO', 1],
+    'Fuera de servicio': ['ESTRUCTURA_FUERA_SERVICIO', 6] };
+  const capaDe = e => CAPA_ESTADO[e.estado] || ['ESTRUCTURA_SIN_ESTADO', 8];
+  const capas = [['0', 7], ['TRAZO_CANAL', 4], ['TEXTO_CLAVE', 7], ['TEXTO_DATOS', 9], ['TEXTO_DESCRIPCION', 8],
+    ...Object.values(CAPA_ESTADO), ['ESTRUCTURA_SIN_ESTADO', 8]];
+
+  const lineas = rec.trazo ? rec.trazo.lineas.map(l => l.coords.map(c => P(c[1], c[0]))) : [];
+  const todo = pts.concat(...lineas);
+  const minX = Math.min(...todo.map(p => p[0])), maxX = Math.max(...todo.map(p => p[0]));
+  const minY = Math.min(...todo.map(p => p[1])), maxY = Math.max(...todo.map(p => p[1]));
+
+  g(0, 'SECTION', 2, 'HEADER', 9, '$ACADVER', 1, 'AC1009', 9, '$DWGCODEPAGE', 3, 'ANSI_1252',
+    9, '$INSBASE', 10, '0.0', 20, '0.0', 30, '0.0',
+    9, '$EXTMIN', 10, n(minX), 20, n(minY), 30, '0.0', 9, '$EXTMAX', 10, n(maxX), 20, n(maxY), 30, '0.0',
+    9, '$LIMMIN', 10, n(minX), 20, n(minY), 9, '$LIMMAX', 10, n(maxX), 20, n(maxY),
+    9, '$TEXTSIZE', 40, n(h), 0, 'ENDSEC');
+  g(0, 'SECTION', 2, 'TABLES',
+    0, 'TABLE', 2, 'LTYPE', 70, 1, 0, 'LTYPE', 2, 'CONTINUOUS', 70, 0, 3, 'Solid line', 72, 65, 73, 0, 40, '0.0', 0, 'ENDTAB',
+    0, 'TABLE', 2, 'LAYER', 70, capas.length);
+  capas.forEach(([nom, col]) => g(0, 'LAYER', 2, nom, 70, 0, 62, col, 6, 'CONTINUOUS'));
+  g(0, 'ENDTAB', 0, 'TABLE', 2, 'STYLE', 70, 1, 0, 'STYLE', 2, 'STANDARD', 70, 0, 40, '0.0', 41, '1.0', 50, '0.0', 71, 0,
+    42, n(h), 3, 'txt', 4, '', 0, 'ENDTAB', 0, 'ENDSEC');
+
+  g(0, 'SECTION', 2, 'ENTITIES');
+  // Trazo del canal
+  lineas.forEach(l => {
+    if (l.length < 2) return;
+    g(0, 'POLYLINE', 8, 'TRAZO_CANAL', 66, 1, 10, '0.0', 20, '0.0', 30, '0.0', 70, 0);
+    l.forEach(p => g(0, 'VERTEX', 8, 'TRAZO_CANAL', 10, n(p[0]), 20, n(p[1]), 30, '0.0'));
+    g(0, 'SEQEND', 8, 'TRAZO_CANAL');
+  });
+  const texto = (capa, x, y, alto, s) => { if (s) g(0, 'TEXT', 8, capa, 10, n(x), 20, n(y), 30, '0.0', 40, n(alto), 1, txt(s)); };
+  ests.forEach((e, i) => {
+    const [x, y] = pts[i], [capa] = capaDe(e), r = h * 0.6;
+    g(0, 'POINT', 8, capa, 10, n(x), 20, n(y), 30, '0.0');
+    g(0, 'CIRCLE', 8, capa, 10, n(x), 20, n(y), 30, '0.0', 40, n(r));
+    const tx = x + r * 1.6;
+    texto('TEXTO_CLAVE', tx, y + h * 0.2, h, e.codigo);
+    const u = utm(e.lat, e.lon);
+    texto('TEXTO_DATOS', tx, y - h * 0.8, h * 0.6, [tipoDe(e), e.km ? 'Km ' + e.km : '', e.estado].filter(Boolean).join(' - '));
+    texto('TEXTO_DATOS', tx, y - h * 1.6, h * 0.6, `E ${u.este.toFixed(2)}  N ${u.norte.toFixed(2)}  (${u.zona})`);
+    // Descripción en renglones de ~60 caracteres (capa aparte para poder apagarla)
+    const pal = String(e.desc || '').replace(/\s+/g, ' ').trim().split(' ');
+    const ren = []; let cur2 = '';
+    pal.forEach(w => { if ((cur2 + ' ' + w).trim().length > 60) { ren.push(cur2); cur2 = w; } else cur2 = (cur2 + ' ' + w).trim(); });
+    if (cur2) ren.push(cur2);
+    ren.slice(0, 8).forEach((s, k) => texto('TEXTO_DESCRIPCION', tx, y - h * (2.5 + k * 0.8), h * 0.5, s));
+  });
+  g(0, 'ENDSEC', 0, 'EOF');
+
+  const blob = new Blob([out.join('\r\n') + '\r\n'], { type: 'application/dxf' });
+  const fuera = ests.filter(e => parseInt(utm(e.lat, e.lon).zona, 10) !== zona).length;
+  const nota = `<br><br>Ábrelo con <b>AutoCAD</b> (Archivo → Abrir). Coordenadas UTM WGS84 zona ${zona}, en metros.` +
+    `<br>Para tenerlo como <b>.dwg</b>: en AutoCAD usa <i>Guardar como → Dibujo (.dwg)</i>.` +
+    (fuera ? `<br>${fuera} estructura(s) están en otra zona UTM; se dibujaron en la zona ${zona} para mantener el plano continuo.` : '') +
+    (ests.length < estsRec.length ? `<br>${estsRec.length - ests.length} estructura(s) sin coordenadas no se incluyeron.` : '');
+  await guardarArchivo(`Plano_${slug(rec.canal)}_${hoy()}.dxf`, blob, 'application/dxf', nota);
+}
+
 /* ---------- Eventos ---------- */
 
 async function init() {
@@ -2022,6 +2106,8 @@ async function init() {
   $('#btnWord').onclick = () => ejecutar(generarWord);
   $('#btnKmz').onclick = () => ejecutar(generarKMZ);
   $('#btnCsv').onclick = () => ejecutar(generarCSV);
+  $('#btnDxf').hidden = !ES_PC; // el plano de AutoCAD solo se ofrece en la PC
+  $('#btnDxf').onclick = () => ejecutar(generarDXF);
   $('#btnExportar').onclick = () => ejecutar(exportarRecorrido);
   $('#btnImportar').onclick = () => { $('#inRec').value = ''; $('#inRec').click(); };
   $('#btnRespaldo').onclick = () => ejecutar(respaldarTodo);

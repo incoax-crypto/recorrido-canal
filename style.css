@@ -49,6 +49,7 @@ input:focus, select:focus, textarea:focus { outline: 2px solid var(--azul2); bor
 .btn.danger { background: #fdecea; color: var(--rojo); }
 .btn.word { background: #1e5bb8; color: #fff; }
 .btn.kmz { background: #2e7d32; color: #fff; }
+.btn.dxf { background: #b71c1c; color: #fff; }
 
 .seg { display: grid; grid-template-columns: repeat(4, 1fr); gap: 6px; }
 .seg button { font: inherit; font-size: 13px; padding: 10px 4px; border-radius: 8px; border: 1px solid var(--borde); background: #fff; color: var(--txt); }
