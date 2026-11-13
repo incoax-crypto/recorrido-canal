@@ -312,10 +312,14 @@ async function renderRec() {
     '<button class="btn ghost block" style="margin-top:0" data-act="cambiar">Cargar KMZ con el trazo del canal</button>';
   $('#croquis').hidden = !t && !ests.some(e => e.lat != null);
   dibujarCroquis();
+  selec = null;
+  renderSel();
+  $('#btnSelec').hidden = !ests.length;
   $('#listaEst').innerHTML = ests.length ? ests.map(e => {
     const f = e.fotos[0];
     return `<div class="item" data-id="${e.id}">
-      ${f ? `<img src="${objUrl(f.mini || f.blob)}" alt="" loading="lazy">` : '<div class="noimg"></div>'}
+      <span class="marca" aria-hidden="true"></span>
+      ${f ?`<img src="${objUrl(f.mini || f.blob)}" alt="" loading="lazy">` : '<div class="noimg"></div>'}
       <div class="info">
         <div class="t">${esc(e.codigo)} · ${esc(tipoDe(e))}<span class="badge" style="background:${COLOR_ESTADO[e.estado] || '#78909c'}">${esc(e.estado || 's/e')}</span></div>
         <div class="s">${e.km ? 'Km ' + esc(e.km) + ' · ' : ''}${e.lat != null ? coordTxt(e.lat, e.lon) : 'Sin coordenadas'} · ${e.fotos.length} foto(s)</div>
@@ -730,6 +734,36 @@ async function guardar() {
   renderRec();
 }
 
+/* ---------- Selección de varias estructuras para eliminarlas ---------- */
+
+let selec = null; // Set con los id seleccionados mientras está activo el modo de selección
+
+function renderSel() {
+  const activo = !!selec, n = activo ? selec.size : 0;
+  $('#vRec').classList.toggle('seleccionando', activo);
+  $('#selBar').hidden = !activo;
+  $('#btnSelec').hidden = activo || !estsRec.length;
+  $('#btnNueva').hidden = activo;
+  $('#selInfo').textContent = n ? `${n} estructura${n === 1 ? '' : 's'} seleccionada${n === 1 ? '' : 's'}` : 'Toca las estructuras que quieres eliminar';
+  $('#selBorrar').disabled = !n;
+  $('#selBorrar').textContent = n ? `Eliminar (${n})` : 'Eliminar';
+  $('#selTodas').textContent = activo && n === estsRec.length ? 'Ninguna' : 'Todas';
+  document.querySelectorAll('#listaEst .item').forEach(it => it.classList.toggle('sel', activo && selec.has(it.dataset.id)));
+}
+
+function salirSeleccion() { selec = null; renderSel(); }
+
+async function eliminarSeleccionadas() {
+  const ids = [...selec], n = ids.length;
+  if (!n) return;
+  const claves = estsRec.filter(e => selec.has(e.id)).map(e => e.codigo);
+  const lista = claves.length > 12 ? claves.slice(0, 12).join(', ') + '…' : claves.join(', ');
+  if (!confirm(`¿Eliminar ${n} estructura${n === 1 ? '' : 's'}?\n\n${lista}\n\nNo se puede deshacer (si quieres conservar una copia, primero usa "Guardar / compartir recorrido").`)) return;
+  for (const id of ids) await dbDel('estructuras', id);
+  await renderRec();
+  toast(`${n} estructura${n === 1 ? '' : 's'} eliminada${n === 1 ? '' : 's'}`);
+}
+
 async function eliminarEstructura() {
   if (!confirm(`¿Eliminar la estructura ${cur.codigo}?`)) return;
   await dbDel('estructuras', cur.id);
@@ -748,6 +782,7 @@ window.appBack = function () {
   if (!$('#visor').hidden) { cerrarVisor(); return true; }
   if (!$('#dlg').hidden) { $('#dlg').hidden = true; return true; }
   if (vista === 'est') { salirForm(); return true; }
+  if (vista === 'rec' && selec) { salirSeleccion(); return true; }
   if (vista === 'rec') { renderInicio(); return true; }
   return false;
 };
@@ -1136,20 +1171,9 @@ function propuestaDescripcion() {
   return { texto: detalle ? `${frase} ${detalle}` : frase, base: detalle ? base : null };
 }
 
-/* Llena la descripción con la propuesta mientras el usuario no la haya escrito o editado. */
+/* La descripción (comentarios) la escribe siempre el usuario: no se llena sola ni se propone texto. */
 function sugerirDescripcion() {
-  const box = $('#fSugDesc'), campo = $('#fDesc');
-  const p = propuestaDescripcion();
-  if (!p.texto || !cur.nuevo) { box.hidden = true; return; }
-  const libre = !campo.value.trim() || campo.value === cur.descAuto;
-  if (libre) { campo.value = p.texto; cur.descAuto = p.texto; }
-  box.hidden = false;
-  box.className = 'sug media';
-  box.innerHTML = (libre
-    ? 'Descripción <b>propuesta</b>' + (p.base ? ` con base en ${esc(p.base.codigo || 'una estructura parecida')}` : '') + '. Revísala y corrígela con lo que observas.'
-    : 'Ya escribiste tu propia descripción.') +
-    (!libre ? `<br><button type="button" class="btn ghost" data-usar-desc="1">Reemplazar por la propuesta</button>` : '');
-  box.dataset.propuesta = p.texto;
+  $('#fSugDesc').hidden = true;
 }
 
 /* Sugiere el tipo de la estructura a partir de su foto principal, salvo que el usuario ya lo haya elegido. */
@@ -1978,8 +2002,22 @@ async function init() {
   };
   $('#listaEst').onclick = ev => {
     const it = ev.target.closest('.item');
-    if (it) ejecutar(() => editarEstructura(it.dataset.id));
+    if (!it) return;
+    if (selec) {
+      const id = it.dataset.id;
+      if (selec.has(id)) selec.delete(id); else selec.add(id);
+      renderSel();
+      return;
+    }
+    ejecutar(() => editarEstructura(it.dataset.id));
   };
+  $('#btnSelec').onclick = () => { selec = new Set(); renderSel(); };
+  $('#selCancelar').onclick = salirSeleccion;
+  $('#selTodas').onclick = () => {
+    selec = selec.size === estsRec.length ? new Set() : new Set(estsRec.map(e => e.id));
+    renderSel();
+  };
+  $('#selBorrar').onclick = () => ejecutar(eliminarSeleccionadas);
   $('#btnNueva').onclick = () => ejecutar(nuevaEstructura);
   $('#btnWord').onclick = () => ejecutar(generarWord);
   $('#btnKmz').onclick = () => ejecutar(generarKMZ);
