@@ -1970,7 +1970,7 @@ const ES_PC = !APP && !/Android|iPhone|iPad|iPod|Mobile/i.test(navigator.userAge
   && !(navigator.maxTouchPoints > 1 && /Mac/i.test(navigator.platform)); // iPad se presenta como Mac
 
 /* DXF R12 (ASCII): lo abre cualquier versión de AutoCAD y se puede guardar como .dwg.
-   Cada estructura queda como punto + círculo en su coordenada UTM, con su clave, tipo, Km y descripción. */
+   Cada estructura queda como punto + círculo en su coordenada UTM, con su clave, cadenamiento y tipo. */
 async function generarDXF() {
   const ests = (await estructurasDe(rec.id)).filter(e => e.lat != null);
   if (!ests.length) { toast('No hay estructuras con coordenadas'); return; }
@@ -1992,7 +1992,7 @@ async function generarDXF() {
   const CAPA_ESTADO = { 'Bueno': ['ESTRUCTURA_BUENO', 3], 'Regular': ['ESTRUCTURA_REGULAR', 2], 'Malo': ['ESTRUCTURA_MALO', 1],
     'Fuera de servicio': ['ESTRUCTURA_FUERA_SERVICIO', 6] };
   const capaDe = e => CAPA_ESTADO[e.estado] || ['ESTRUCTURA_SIN_ESTADO', 8];
-  const capas = [['0', 7], ['TRAZO_CANAL', 4], ['TEXTO_CLAVE', 7], ['TEXTO_DATOS', 9], ['TEXTO_DESCRIPCION', 8],
+  const capas = [['0', 7], ['TRAZO_CANAL', 4], ['TEXTO_CLAVE', 7], ['TEXTO_DATOS', 9],
     ...Object.values(CAPA_ESTADO), ['ESTRUCTURA_SIN_ESTADO', 8]];
 
   const lineas = rec.trazo ? rec.trazo.lineas.map(l => l.coords.map(c => P(c[1], c[0]))) : [];
@@ -2026,16 +2026,10 @@ async function generarDXF() {
     g(0, 'POINT', 8, capa, 10, n(x), 20, n(y), 30, '0.0');
     g(0, 'CIRCLE', 8, capa, 10, n(x), 20, n(y), 30, '0.0', 40, n(r));
     const tx = x + r * 1.6;
+    // Solo clave, cadenamiento y tipo (sin comentarios ni descripción)
     texto('TEXTO_CLAVE', tx, y + h * 0.2, h, e.codigo);
-    const u = utm(e.lat, e.lon);
-    texto('TEXTO_DATOS', tx, y - h * 0.8, h * 0.6, [tipoDe(e), e.km ? 'Km ' + e.km : '', e.estado].filter(Boolean).join(' - '));
-    texto('TEXTO_DATOS', tx, y - h * 1.6, h * 0.6, `E ${u.este.toFixed(2)}  N ${u.norte.toFixed(2)}  (${u.zona})`);
-    // Descripción en renglones de ~60 caracteres (capa aparte para poder apagarla)
-    const pal = String(e.desc || '').replace(/\s+/g, ' ').trim().split(' ');
-    const ren = []; let cur2 = '';
-    pal.forEach(w => { if ((cur2 + ' ' + w).trim().length > 60) { ren.push(cur2); cur2 = w; } else cur2 = (cur2 + ' ' + w).trim(); });
-    if (cur2) ren.push(cur2);
-    ren.slice(0, 8).forEach((s, k) => texto('TEXTO_DESCRIPCION', tx, y - h * (2.5 + k * 0.8), h * 0.5, s));
+    texto('TEXTO_DATOS', tx, y - h * 0.8, h * 0.6, e.km ? 'Km ' + e.km : '');
+    texto('TEXTO_DATOS', tx, y - h * 1.6, h * 0.6, tipoDe(e));
   });
   g(0, 'ENDSEC', 0, 'EOF');
 
