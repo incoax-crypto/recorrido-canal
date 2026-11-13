@@ -1509,7 +1509,8 @@ async function generarWord() {
       children: [new TextRun(`${e.codigo} — ${tipoDe(e)}${e.km ? '  (Km ' + e.km + ')' : ''}`)]
     }));
     if (e.tramoCanal) hoja.push(p(`Canal: ${e.tramoCanal} (a ${Math.round(e.distEje)} m del eje)`, { size: 18, bold: true, color: '37474F', keepNext: true, after: 0 }));
-    hoja.push(p(`Estado: ${e.estado || 'Sin evaluar'}     Fecha: ${fechaTxt(e.fecha)}`, { size: 18, color: '5B6876', keepNext: true, after: 0 }));
+    hoja.push(p(`Estado: ${e.estado || 'Sin evaluar'}     Fecha: ${fechaTxt(e.fecha)}` +
+      (e.codigoCampo && e.codigoCampo !== e.codigo ? `     Clave en campo: ${e.codigoCampo}` : ''), { size: 18, color: '5B6876', keepNext: true, after: 0 }));
     hoja.push(p(`Coordenadas: ${e.lat != null ? coordTxt(e.lat, e.lon) + (e.acc ? ` (±${Math.round(e.acc)} m)` : '') : 'sin coordenadas'}`,
       { size: 18, color: '5B6876', keepNext: true }));
 
@@ -1564,6 +1565,21 @@ async function generarWord() {
 
 /* ---------- KMZ (Google Earth) ---------- */
 
+/* Ícono de foto para el KMZ: 200 px de ancho, con marco de 8 px del color del estado. */
+async function iconoFoto(foto, color) {
+  const img = await loadImage(foto.mini || foto.blob);
+  const W = 200, H = Math.round(W * img.naturalHeight / img.naturalWidth), B = 8;
+  const c = document.createElement('canvas');
+  c.width = W + 2 * B; c.height = H + 2 * B;
+  const g = c.getContext('2d');
+  g.fillStyle = color; g.fillRect(0, 0, c.width, c.height);
+  g.drawImage(img, B, B, W, H);
+  img.src = '';
+  const b = await new Promise(r => c.toBlob(r, 'image/jpeg', 0.85));
+  soltar(c);
+  return b;
+}
+
 async function generarKMZ() {
   const ests = await estructurasDe(rec.id);
   const geo = ests.filter(e => e.lat != null);
@@ -1574,6 +1590,16 @@ async function generarKMZ() {
   const cdata = s => String(s).replace(/]]>/g, ']]&gt;');
   const zip = new JSZip();
   const fotos = [];
+  // Ícono de cada estructura: miniatura de su foto principal con marco del color de su estado
+  const iconos = {};
+  for (const [i, e] of geo.entries()) {
+    if (!e.fotos.length) continue;
+    busy(`Preparando fotos del KMZ (${i + 1} de ${geo.length})…`);
+    const n = `files/icono_${slug(e.codigo)}.jpg`;
+    zip.file(n, await iconoFoto(e.fotos[0], COLOR_ESTADO[e.estado] || '#ffffff'), { compression: 'STORE' });
+    iconos[e.id] = n;
+  }
+  busy('Generando KMZ…');
   const marcas = geo.map(e => {
     const imgs = e.fotos.map((f, i) => {
       const n = `files/${slug(e.codigo)}_${i + 1}.jpg`;
@@ -1585,10 +1611,14 @@ async function generarKMZ() {
       (e.tramoCanal ? `Canal: ${esc(e.tramoCanal)} (a ${Math.round(e.distEje)} m del eje)<br>` : '') +
       `Estado: ${esc(e.estado || 'Sin evaluar')}<br>Coordenadas: ${coordTxt(e.lat, e.lon)}<br>Fecha: ${fechaTxt(e.fecha)}<br><br>` +
       `${esc(e.desc).replace(/\n/g, '<br>')}<br><br>${imgs}`;
+    // Con foto: la propia foto es el marcador; sin foto: el alfiler de color del estado
+    const marca = iconos[e.id]
+      ? `<Style><IconStyle><scale>2.8</scale><Icon><href>${iconos[e.id]}</href></Icon><hotSpot x="0.5" y="0" xunits="fraction" yunits="fraction"/></IconStyle><LabelStyle><scale>0.9</scale></LabelStyle></Style>`
+      : `<styleUrl>#${estilo(e)}</styleUrl>`;
     return `    <Placemark>
       <name>${esc(e.codigo + ' ' + tipoDe(e))}</name>
       <description><![CDATA[${cdata(html)}]]></description>
-      <styleUrl>#${estilo(e)}</styleUrl>
+      ${marca}
       <Point><coordinates>${e.lon.toFixed(7)},${e.lat.toFixed(7)},0</coordinates></Point>
     </Placemark>`;
   }).join('\n');
@@ -1733,20 +1763,121 @@ async function importarUno(zip, parte) {
   }
   busy(`Abriendo "${r.canal}"…`);
   for (const e of parte.estructuras) {
-    const fotos = [];
-    for (const f of e.fotos) {
-      const arch = zip.file(f.archivo);
-      if (!arch) continue;
-      const blob = new Blob([await arch.async('uint8array')], { type: 'image/jpeg' });
-      const { archivo, emb, ...meta } = f;
-      fotos.push({ ...meta, blob, emb: emb ? new Float32Array(b64Bytes(emb).buffer) : null });
-    }
-    const est = { ...e, id: e.id + sufijo, recId: r.id, fotos };
+    const est = { ...e, id: e.id + sufijo, recId: r.id, fotos: await fotosDesdeZip(zip, e.fotos) };
     await dbPut('estructuras', est);
     await aprender(est); // lo aprendido en el otro teléfono también sirve aquí
   }
   await dbPut('recorridos', r);
   return r;
+}
+
+/* ---------- Orden por cadenamiento y unión de varios recorridos ---------- */
+
+/* Cadenamiento a metros: "2+715" → 2715, "2.715" (km) → 2715, "850" → 850; vacío o inválido → null. */
+function kmMetros(km) {
+  const s = String(km || '').trim();
+  if (!s) return null;
+  const m = s.match(/^(\d+)\s*\+\s*(\d+(?:[.,]\d+)?)$/);
+  if (m) return +m[1] * 1000 + parseFloat(m[2].replace(',', '.'));
+  const v = parseFloat(s.replace(',', '.'));
+  return isFinite(v) ? (/[.,]/.test(s) ? v * 1000 : v) : null;
+}
+
+/* Ordena las estructuras por canal (si hay varios) y cadenamiento, y las renumera E-01, E-02…
+   La clave anterior se conserva como clave de campo: es la que aparece en el sello de la foto. */
+async function ordenarPorCadenamiento(r = rec) {
+  const ests = await estructurasDe(r.id);
+  const canalDe = e => e.tramoCanal || r.canal;
+  const varios = new Set(ests.map(canalDe)).size > 1;
+  const cmp = (x, y) => x === y ? 0 : x < y ? -1 : 1;
+  const metros = e => { const v = kmMetros(e.km); return v == null ? Infinity : v; }; // sin Km: al final
+  ests.sort((a, b) => (varios ? canalDe(a).localeCompare(canalDe(b), 'es') : 0) || cmp(metros(a), metros(b)) || cmp(a.fecha, b.fecha));
+  for (const [i, e] of ests.entries()) {
+    const nuevo = 'E-' + pad(i + 1);
+    if (!e.codigoCampo && e.codigo !== nuevo) e.codigoCampo = e.codigo;
+    e.num = i + 1;
+    e.codigo = nuevo;
+    await dbPut('estructuras', e);
+  }
+  return ests.length;
+}
+
+/* Lee las fotos de una estructura desde el ZIP de un .rcanal. */
+async function fotosDesdeZip(zip, fotosJson) {
+  const fotos = [];
+  for (const f of fotosJson) {
+    const arch = zip.file(f.archivo);
+    if (!arch) continue;
+    const blob = new Blob([await arch.async('uint8array')], { type: 'image/jpeg' });
+    const { archivo, emb, ...meta } = f;
+    fotos.push({ ...meta, blob, emb: emb ? new Float32Array(b64Bytes(emb).buffer) : null });
+  }
+  return fotos;
+}
+
+async function leerRcanal(f) {
+  let zip, datos;
+  try {
+    zip = await JSZip.loadAsync(await f.arrayBuffer());
+    datos = JSON.parse(await zip.file('recorrido.json').async('string'));
+  } catch (e) {
+    throw new Error(`"${f.name}" no es un recorrido de la app (.rcanal) o está dañado`);
+  }
+  if (datos.formato !== FORMATO_REC) throw new Error(`"${f.name}" no es un recorrido de la app (.rcanal)`);
+  return { zip, partes: datos.recorridos || [datos] };
+}
+
+/* Une varios archivos .rcanal en un recorrido nuevo, ordenado por cadenamiento.
+   Si una misma estructura viene en dos archivos, se queda la versión modificada más reciente. */
+async function unirRecorridos(archivos) {
+  const fuentes = [];
+  for (const [i, a] of archivos.entries()) {
+    busy(`Leyendo archivo ${i + 1} de ${archivos.length}…`);
+    const f = await a;
+    const { zip, partes } = await leerRcanal(f);
+    for (const parte of partes) fuentes.push({ zip, parte, archivo: f.name });
+  }
+  if (!fuentes.length) return;
+  const recs = fuentes.map(s => s.parte.recorrido);
+  const nombres = [...new Set(recs.map(r => r.canal))];
+  idle();
+  const sugerido = nombres.length === 1 ? nombres[0] : `${nombres[0]} y otros (unido)`;
+  const canal = (prompt(`Se unirán ${fuentes.length} recorrido(s):\n• ${nombres.join('\n• ')}\n\nNombre del recorrido unido:`, sugerido) || '').trim();
+  if (!canal) return;
+
+  const porId = new Map();
+  for (const s of fuentes) {
+    for (const e of s.parte.estructuras) {
+      const prev = porId.get(e.id), t = e.mod || e.fecha || 0;
+      if (!prev || t > (prev.e.mod || prev.e.fecha || 0)) porId.set(e.id, { e, zip: s.zip, archivo: s.archivo });
+    }
+  }
+  const unico = v => [...new Set(recs.map(v).filter(Boolean))];
+  const conTrazo = recs.find(r => r.trazo);
+  const r = {
+    id: 'r' + Date.now(), canal, resp: unico(x => x.resp).join(', '), tramo: unico(x => x.tramo).join('; '),
+    creado: Math.min(...recs.map(x => x.creado || Date.now())), trazo: conTrazo ? conTrazo.trazo : null,
+    unidoDe: [...new Set(fuentes.map(s => s.archivo))]
+  };
+  let i = 0;
+  const base = Date.now();
+  for (const { e, zip, archivo } of porId.values()) {
+    busy(`Uniendo estructuras (${++i} de ${porId.size})…`);
+    const est = {
+      ...e, id: `e${base}_${i}`, recId: r.id, fotos: await fotosDesdeZip(zip, e.fotos),
+      codigoCampo: e.codigoCampo || e.codigo, archivoOrigen: archivo
+    };
+    await dbPut('estructuras', est);
+    await aprender(est);
+  }
+  await dbPut('recorridos', r);
+  rec = r;
+  if (r.trazo) await recalcularKm();
+  busy('Ordenando por cadenamiento…');
+  await ordenarPorCadenamiento(r);
+  await renderRec();
+  const repetidas = fuentes.reduce((s, x) => s + x.parte.estructuras.length, 0) - porId.size;
+  toast(`Recorrido unido: ${porId.size} estructura(s) ordenadas por cadenamiento` + (repetidas ? ` (${repetidas} repetida(s) omitida(s))` : ''), 6000);
 }
 
 /* Abre un archivo .rcanal: un recorrido o un respaldo con varios. Si alguno ya existe, pregunta qué hacer. */
@@ -1856,10 +1987,18 @@ async function init() {
   $('#btnExportar').onclick = () => ejecutar(exportarRecorrido);
   $('#btnImportar').onclick = () => { $('#inRec').value = ''; $('#inRec').click(); };
   $('#btnRespaldo').onclick = () => ejecutar(respaldarTodo);
-  $('#inRec').onchange = ev => {
-    const f = ev.target.files[0];
-    if (f) ejecutar(async () => importarRecorrido(new Uint8Array(await f.arrayBuffer())));
+  $('#inRec').onchange = ev => { if (ev.target.files.length) abrirArchivosRecorrido([...ev.target.files]); };
+  $('#btnUnir').onclick = () => { $('#inUnir').value = ''; $('#inUnir').click(); };
+  $('#inUnir').onchange = ev => {
+    const fs = [...ev.target.files];
+    if (fs.length < 2) { toast('Elige dos o más archivos .rcanal para unirlos'); return; }
+    ejecutar(() => unirRecorridos(fs));
   };
+  $('#btnOrdenar').onclick = () => ejecutar(async () => {
+    const n = await ordenarPorCadenamiento(rec);
+    await renderRec();
+    toast(`${n} estructura(s) ordenadas por cadenamiento y renumeradas`);
+  });
 
   $('#vEst').addEventListener('input', () => { dirty = true; });
   $('#fTipo').onchange = () => {
@@ -2007,6 +2146,11 @@ async function init() {
 
 /* Abre uno o varios archivos .rcanal (o promesas de archivo) en orden. */
 function abrirArchivosRecorrido(archivos) {
+  if (archivos.length > 1 && confirm(`Elegiste ${archivos.length} archivos .rcanal.\n\n` +
+    'Aceptar: UNIRLOS en un solo recorrido ordenado por cadenamiento.\nCancelar: abrir cada uno por separado.')) {
+    ejecutar(() => unirRecorridos(archivos));
+    return;
+  }
   ejecutar(async () => {
     for (const a of archivos) {
       const f = await a;

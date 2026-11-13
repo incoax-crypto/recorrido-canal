@@ -54,6 +54,7 @@
       </label>
       <button id="btnIniciar" class="btn primary block">Iniciar recorrido</button>
       <button id="btnImportar" type="button" class="btn ghost block">Abrir recorrido desde archivo (.rcanal)</button>
+      <button id="btnUnir" type="button" class="btn ghost block">Unir varios archivos .rcanal en un recorrido</button>
     </div>
     <h3 class="sect">Recorridos guardados</h3>
     <div id="listaRec"></div>
@@ -68,6 +69,7 @@
       <button id="btnKmz" class="btn kmz">Archivo KMZ</button>
       <button id="btnCsv" class="btn ghost">Tabla CSV</button>
       <button id="btnExportar" class="btn rec">Guardar / compartir recorrido</button>
+      <button id="btnOrdenar" class="btn ghost ancho">Ordenar estructuras por cadenamiento</button>
     </div>
     <div class="card">
       <div id="trazoBar"></div>
@@ -134,7 +136,8 @@
 
 <input id="inCam" type="file" accept="image/*" capture="environment" hidden>
 <input id="inGal" type="file" accept="image/*" multiple hidden>
-<input id="inRec" type="file" hidden>
+<input id="inRec" type="file" multiple hidden>
+<input id="inUnir" type="file" multiple hidden>
 <input id="inKmz" type="file" accept=".kmz,.kml,application/vnd.google-earth.kmz,application/vnd.google-earth.kml+xml" hidden>
 
 <div id="overlay" hidden><div class="box"><div class="spin"></div><div id="ovMsg">Procesando…</div></div></div>
