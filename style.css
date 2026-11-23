@@ -141,9 +141,9 @@ body.soltar #soltarAviso { display: flex; }
 .bar { position: fixed; left: 0; right: 0; bottom: 0; z-index: 4; display: grid; grid-template-columns: 1fr 2fr; gap: 10px;
   padding: 10px 12px calc(10px + env(safe-area-inset-bottom)); background: #fff; box-shadow: 0 -2px 8px rgba(0,0,0,.12); }
 
-#dlgSentido { position: fixed; inset: 0; z-index: 25; background: rgba(0,0,0,.55); display: flex; align-items: center; justify-content: center; padding: 16px; }
-#dlgSentido .box { background: #fff; border-radius: 14px; padding: 20px; width: 100%; max-width: 400px; }
-#sentMsg { font-size: 15px; margin-bottom: 4px; word-break: break-word; }
+#dlgSentido, #dlgUbic { position: fixed; inset: 0; z-index: 25; background: rgba(0,0,0,.55); display: flex; align-items: center; justify-content: center; padding: 16px; }
+#dlgSentido .box, #dlgUbic .box { background: #fff; border-radius: 14px; padding: 20px; width: 100%; max-width: 420px; }
+#sentMsg, #ubicMsg { font-size: 15px; margin-bottom: 4px; word-break: break-word; }
 .btn.sent { text-align: left; }
 .btn.sent small { display: block; font-weight: 400; font-size: 13px; opacity: .9; margin-top: 2px; }
 #overlay, #dlg { position: fixed; inset: 0; z-index: 20; background: rgba(0,0,0,.5); display: flex; align-items: center; justify-content: center; padding: 16px; }

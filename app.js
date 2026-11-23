@@ -163,7 +163,8 @@ function cadenamiento(lat, lon, trazo) {
       const L2 = bx * bx + by * by, seg = Math.sqrt(L2);
       const t = L2 ? Math.max(0, Math.min(1, (px * bx + py * by) / L2)) : 0;
       const d = Math.hypot(px - t * bx, py - t * by);
-      if (!best || d < best.dist) best = { li, tramo: l.nombre, dist: d, kmN: acum + t * seg };
+      if (!best || d < best.dist) best = { li, tramo: l.nombre, dist: d, kmN: acum + t * seg,
+        plon: a[0] + t * (b[0] - a[0]), plat: a[1] + t * (b[1] - a[1]) }; // punto proyectado sobre el eje
       acum += seg;
     }
     if (best && best.li === li) best.L = acum;
@@ -545,6 +546,14 @@ function renderUbic() {
     (cur.alt != null ? `<br>Altitud ${Math.round(cur.alt)} m` : '');
   const c = rec.trazo ? cadenamiento(cur.lat, cur.lon, rec.trazo) : null;
   if (c) {
+    // PC, foto de galería: se puede alternar entre las coordenadas de la foto y el punto sobre la línea del KMZ
+    if (ES_PC && cur.latFoto != null) {
+      h += cur.sobreTrazo
+        ? `<div class="trz">Ubicada <b>sobre la línea del KMZ</b> (la foto marca a ${Math.round(distM([cur.lonFoto, cur.latFoto], [cur.lon, cur.lat]))} m).` +
+          `<br><button type="button" class="btn ghost" data-ubic="foto">Regresar a las coordenadas de la foto</button></div>`
+        : `<div class="trz">Ubicada en las <b>coordenadas de la foto</b>.` +
+          `<br><button type="button" class="btn ghost" data-ubic="trazo">Poner sobre la línea del KMZ más cercana</button></div>`;
+    }
     h += `<div class="trz">Canal: <b>${esc(c.tramo)}</b><br>` +
       (c.sentido ? `Km ${kmTxt(c.km)} · ` : 'Km sin definir (falta el sentido del canal) · ') + `a ${Math.round(c.dist)} m del eje` +
       (c.dist > 150 ? '<br>⚠ La estructura está lejos del trazo' : '') +
@@ -598,9 +607,38 @@ function cerrarVisor() {
   if (urlVisor) { URL.revokeObjectURL(urlVisor); urlVisor = null; }
 }
 
+/* Solo PC: pregunta si la estructura de una foto de galería se deja en sus coordenadas o se pone sobre la línea del KMZ. */
+function preguntarUbicacion(c) {
+  idle();
+  $('#ubicMsg').innerHTML = `Las coordenadas de la foto quedan a <b>${Math.round(c.dist)} m</b> del eje de <b>${esc(c.tramo)}</b>.<br><br>¿Dónde ubico la estructura?`;
+  $('#ubicFoto').innerHTML = 'Dejarla donde marcan las coordenadas<small>Tal como vienen en los metadatos de la foto</small>';
+  $('#ubicTrazo').innerHTML = `Ponerla sobre la línea del KMZ más cercana<small>${esc(c.tramo)}, a ${Math.round(c.dist)} m</small>`;
+  $('#dlgUbic').hidden = false;
+  return new Promise(res => {
+    $('#ubicFoto').onclick = () => { $('#dlgUbic').hidden = true; res('foto'); };
+    $('#ubicTrazo').onclick = () => { $('#dlgUbic').hidden = true; res('trazo'); };
+  });
+}
+
+/* Mueve la estructura al punto más cercano del trazo o la regresa a las coordenadas de su foto. */
+async function moverUbicacion(modo) {
+  if (cur.latFoto == null) return;
+  if (modo === 'trazo') {
+    const c = rec.trazo && cadenamiento(cur.latFoto, cur.lonFoto, rec.trazo);
+    if (!c) return;
+    Object.assign(cur, { lat: c.plat, lon: c.plon, sobreTrazo: true });
+  } else {
+    Object.assign(cur, { lat: cur.latFoto, lon: cur.lonFoto, sobreTrazo: false });
+  }
+  cur.kmAuto = true; // el cadenamiento se recalcula con la nueva posición
+  dirty = true;
+  await autoKm();
+  renderUbic();
+}
+
 async function fijarUbicacion() {
   if (!pos) { toast('Esperando señal GPS…'); return; }
-  Object.assign(cur, { lat: pos.lat, lon: pos.lon, acc: pos.acc, alt: pos.alt });
+  Object.assign(cur, { lat: pos.lat, lon: pos.lon, acc: pos.acc, alt: pos.alt, latFoto: null, lonFoto: null, sobreTrazo: false });
   dirty = true;
   await autoKm();
   renderUbic();
@@ -612,16 +650,29 @@ async function agregarFotos(files, fuente) {
   leerForm();
   busy('Procesando foto…');
   try {
-    let sinGpsGaleria = 0;
+    let sinGpsGaleria = 0, deGaleria = false;
     const nuevas = [];
     for (const [i, f] of files.entries()) {
       const foto = await procesarFoto(f, fuente, i);
       if (fuente === 'gal' && foto.lat == null) sinGpsGaleria++;
       cur.fotos.push(foto);
       nuevas.push(foto);
-      if (cur.lat == null && foto.lat != null) Object.assign(cur, { lat: foto.lat, lon: foto.lon, acc: foto.acc, alt: foto.alt });
+      if (cur.lat == null && foto.lat != null) {
+        Object.assign(cur, { lat: foto.lat, lon: foto.lon, acc: foto.acc, alt: foto.alt, latFoto: null, lonFoto: null, sobreTrazo: false });
+        deGaleria = fuente === 'gal';
+      }
     }
     dirty = true;
+    // Solo en PC y solo con fotos de galería: dejarla en sus coordenadas o ponerla sobre la línea del KMZ
+    // (las de la cámara se quedan siempre donde marcan sus coordenadas)
+    if (deGaleria && ES_PC && rec.trazo) {
+      const c = cadenamiento(cur.lat, cur.lon, rec.trazo);
+      if (c) {
+        cur.latFoto = cur.lat; cur.lonFoto = cur.lon;
+        if (c.dist >= 0.5 && await preguntarUbicacion(c) === 'trazo') Object.assign(cur, { lat: c.plat, lon: c.plon, sobreTrazo: true });
+        busy('Procesando foto…');
+      }
+    }
     sugerirTipo();
     sugerirEstado();
     await autoKm();
@@ -778,7 +829,7 @@ function salirForm() {
 }
 
 window.appBack = function () {
-  if (!$('#overlay').hidden || !$('#dlgSentido').hidden) return true;
+  if (!$('#overlay').hidden || !$('#dlgSentido').hidden || !$('#dlgUbic').hidden) return true;
   if (!$('#visor').hidden) { cerrarVisor(); return true; }
   if (!$('#dlg').hidden) { $('#dlg').hidden = true; return true; }
   if (vista === 'est') { salirForm(); return true; }
@@ -2056,6 +2107,8 @@ async function init() {
   $('#trazoBar').onclick = ev => { const b = ev.target.closest('[data-act]'); if (b) ejecutar(() => accionTrazo(b.dataset.act)); };
   $('#fKm').addEventListener('input', () => { cur.kmAuto = false; sugerirDescripcion(); });
   $('#fUbic').onclick = ev => {
+    const u = ev.target.closest('[data-ubic]');
+    if (u) { ejecutar(() => moverUbicacion(u.dataset.ubic)); return; }
     const s = ev.target.closest('[data-sentido]');
     if (s) {
       ejecutar(async () => {
