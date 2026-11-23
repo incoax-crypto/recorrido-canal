@@ -316,7 +316,8 @@ async function renderRec() {
   selec = null;
   renderSel();
   $('#btnSelec').hidden = !ests.length;
-  $('#listaEst').innerHTML = ests.length ? ests.map(e => {
+  // En pantalla, la última estructura registrada queda arriba (los reportes conservan el orden E-01, E-02…)
+  $('#listaEst').innerHTML = ests.length ? [...ests].reverse().map(e => {
     const f = e.fotos[0];
     return `<div class="item" data-id="${e.id}">
       <span class="marca" aria-hidden="true"></span>
